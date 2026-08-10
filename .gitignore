@@ -1,0 +1,33 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# 工具/本地配置
+.workbuddy/
+.idea/
+.vscode/
+
+# 运行产物
+output/
+startup_check.txt
+*.log
+web/logs/
+web/uploads/
+web/config/analysis_snapshot.json
+web/config/conversations/
+
+# 学生数据（隐私，不上传）
+头歌/
+MOOC/
+data/student_scores.csv
+data/qa_sediment/
+data/knowledge/backups/
+data/knowledge/*.backup.csv
+
+# 临时文件
+*.tmp
+~$*
+.DS_Store
+Thumbs.db

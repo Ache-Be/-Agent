@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>教学预警系统 | 学生错题-知识点智能分析体</title>
+    <link rel="stylesheet" href="/static/css/common.css">
+    <style>
+        /* 与公共样式（common.css）的差异部分：上传首页保持居中窄布局 */
+        .header {
+            padding: 28px 0 24px;
+            text-align: center;
+        }
+        .header h1 { font-size: 24px; }
+        .container { max-width: 680px; padding: 32px 20px; }
+        .flash { margin-bottom: 16px; }
+
+        .upload-area {
+            border: 2px dashed #d0d5dd;
+            border-radius: 10px;
+            padding: 40px 20px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s;
+            position: relative;
+        }
+        .upload-area:hover {
+            border-color: #1a73e8;
+            background: #f8faff;
+        }
+        .upload-area.dragover {
+            border-color: #1a73e8;
+            background: #e8f0fe;
+        }
+        .upload-area .icon {
+            font-size: 48px;
+            color: #1a73e8;
+            margin-bottom: 12px;
+        }
+        .upload-area p { font-size: 15px; color: #555; margin-bottom: 4px; }
+        .upload-area .hint { font-size: 13px; color: #999; }
+        .upload-area input[type="file"] {
+            position: absolute;
+            inset: 0;
+            opacity: 0;
+            cursor: pointer;
+        }
+        .file-info {
+            display: none;
+            margin-top: 12px;
+            padding: 12px 16px;
+            background: #f0f7ff;
+            border-radius: 8px;
+            font-size: 14px;
+        }
+        .file-info.show { display: block; }
+        .file-info .name { font-weight: 600; color: #1a73e8; }
+        .file-info .size { color: #666; margin-left: 12px; }
+
+        .info-section {
+            margin-top: 24px;
+            font-size: 14px;
+            color: #666;
+        }
+        .info-section h3 {
+            font-size: 15px;
+            color: #444;
+            margin-bottom: 10px;
+        }
+        .info-section ul {
+            list-style: none;
+            padding: 0;
+        }
+        .info-section li {
+            padding: 6px 0;
+            border-bottom: 1px solid #f0f0f0;
+        }
+        .info-section li:last-child { border-bottom: none; }
+        .info-section li::before {
+            content: "·";
+            color: #1a73e8;
+            font-weight: bold;
+            margin-right: 8px;
+        }
+        /* .footer 样式由 common.css 提供 */
+
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 20px;
+        }
+        .loading.show { display: block; }
+        .spinner {
+            width: 36px; height: 36px;
+            border: 3px solid #e0e0e0;
+            border-top-color: #1a73e8;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin: 0 auto 10px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>教学预警系统</h1>
+        <p>学生错题 — 知识点智能分析体</p>
+    </div>
+
+    <div class="container">
+        <div class="card">
+            <h2>上传数据文件</h2>
+
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    {% for category, message in messages %}
+                        <div class="flash {{ category }}">{{ message }}</div>
+                    {% endfor %}
+                {% endif %}
+            {% endwith %}
+
+            <form method="POST" enctype="multipart/form-data" id="uploadForm">
+                <div class="upload-area" id="dropZone">
+                    <div class="icon">&#128196;</div>
+                    <p>点击选择或拖拽 CSV 文件到此处</p>
+                    <p class="hint">支持头歌实验数据 / MOOC班级成绩（可多选）</p>
+                    <input type="file" name="file" accept=".csv" id="fileInput" multiple>
+                </div>
+
+                <div class="file-info" id="fileInfo">
+                    <span class="name" id="fileName"></span>
+                    <span class="size" id="fileSize"></span>
+                </div>
+
+                <button type="submit" class="btn" id="submitBtn" disabled>
+                    开始分析
+                </button>
+
+                <div class="loading" id="loading">
+                    <div class="spinner"></div>
+                    <p>正在分析数据，请稍候...</p>
+                </div>
+            </form>
+        </div>
+
+        <div class="card info-section">
+            <h3>支持的数据格式</h3>
+            <ul>
+                <li><strong>头歌实验数据</strong> — 文件名格式：<code>ID_实验名称.csv</code>，包含学生实验得分及子任务明细</li>
+                <li><strong>MOOC班级成绩</strong> — 文件名格式：<code>ClassID_班级名称.csv</code>，包含各项考核成绩</li>
+                <li>系统会自动检测数据类型，无需手动选择</li>
+                <li>分析完成后可查看报告并下载为文本文件</li>
+            </ul>
+        </div>
+    </div>
+
+    <div class="footer">
+        教学预警系统 v0.2
+    </div>
+
+    <script>
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+        const fileInfo = document.getElementById('fileInfo');
+        const fileName = document.getElementById('fileName');
+        const fileSize = document.getElementById('fileSize');
+        const submitBtn = document.getElementById('submitBtn');
+        const uploadForm = document.getElementById('uploadForm');
+        const loading = document.getElementById('loading');
+
+        // 拖拽效果
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('dragover');
+        });
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('dragover');
+        });
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+            if (e.dataTransfer.files.length) {
+                fileInput.files = e.dataTransfer.files;
+                updateFileInfo();
+            }
+        });
+
+        fileInput.addEventListener('change', updateFileInfo);
+
+        function updateFileInfo() {
+            const files = fileInput.files;
+            if (files.length) {
+                if (files.length === 1) {
+                    fileName.textContent = files[0].name;
+                    const size = files[0].size > 1024*1024
+                        ? (files[0].size/1024/1024).toFixed(1) + ' MB'
+                        : (files[0].size/1024).toFixed(1) + ' KB';
+                    fileSize.textContent = size;
+                } else {
+                    fileName.textContent = files.length + ' 个文件';
+                    let totalSize = 0;
+                    for (let f of files) totalSize += f.size;
+                    fileSize.textContent = totalSize > 1024*1024
+                        ? (totalSize/1024/1024).toFixed(1) + ' MB'
+                        : (totalSize/1024).toFixed(1) + ' KB';
+                }
+                fileInfo.classList.add('show');
+                submitBtn.disabled = false;
+            }
+        }
+
+        uploadForm.addEventListener('submit', () => {
+            submitBtn.disabled = true;
+            submitBtn.textContent = '分析中...';
+            loading.classList.add('show');
+        });
+    </script>
+</body>
+</html>

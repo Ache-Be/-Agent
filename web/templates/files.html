@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>数据文件管理 | 教学预警系统</title>
+    <link rel="stylesheet" href="/static/css/common.css">
+    <style>
+        .search-bar {
+            display: flex; align-items: center; gap: 10px;
+            margin-bottom: 16px;
+        }
+        .search-input {
+            flex: 1; max-width: 420px;
+            padding: 10px 14px; border: 1px solid #d0d5dd; border-radius: 8px;
+            font-size: 14px; outline: none; transition: border-color 0.2s;
+        }
+        .search-input:focus { border-color: #1a73e8; box-shadow: 0 0 0 3px rgba(26,115,232,0.12); }
+        .search-hint { color: #999; font-size: 12px; }
+        .file-empty {
+            text-align: center; padding: 60px 20px; color: #bbb; font-size: 14px;
+        }
+        .file-icon { font-size: 15px; margin-right: 6px; }
+        .file-name-cell { max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .btn-del {
+            padding: 4px 12px; border: 1px solid #fca5a5; border-radius: 6px;
+            background: white; color: #dc2626; font-size: 12px; cursor: pointer;
+        }
+        .btn-del:hover { background: #fef2f2; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-inner">
+            <h1>教学预警系统</h1>
+            <div class="header-links">
+                <a href="{{ url_for('index') }}">&larr; 返回</a>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="page-title">数据文件管理</div>
+
+        <div class="summary-card">
+            <div class="count">共 <strong id="fileCount">0</strong> 个已上传数据文件</div>
+        </div>
+
+        <div class="search-bar">
+            <input type="text" id="searchInput" class="search-input" placeholder="输入文件名关键词搜索..." autocomplete="off">
+            <span class="search-hint" id="searchHint"></span>
+        </div>
+
+        <div class="table-wrap">
+            <table class="result-table">
+                <thead>
+                    <tr>
+                        <th>文件名</th>
+                        <th>类型</th>
+                        <th>大小</th>
+                        <th>上传时间</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody id="fileList"></tbody>
+            </table>
+        </div>
+        <div class="file-empty" id="fileEmpty" style="display:none;">暂无已上传的数据文件</div>
+    </div>
+
+    <script>
+        let allFiles = [];
+
+        function escHtml(s) {
+            return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+        }
+
+        async function loadFiles() {
+            try {
+                const resp = await fetch('/api/data_files');
+                const data = await resp.json();
+                allFiles = data.files || [];
+            } catch (e) {
+                allFiles = [];
+            }
+            renderFiles();
+        }
+
+        function renderFiles() {
+            const kw = document.getElementById('searchInput').value.trim().toLowerCase();
+            const filtered = kw ? allFiles.filter(f => f.name.toLowerCase().includes(kw)) : allFiles;
+            document.getElementById('fileCount').textContent = filtered.length;
+            document.getElementById('searchHint').textContent = kw ? `找到 ${filtered.length} 个匹配文件` : '';
+            const tbody = document.getElementById('fileList');
+            const empty = document.getElementById('fileEmpty');
+            if (!filtered.length) {
+                tbody.innerHTML = '';
+                empty.style.display = 'block';
+                empty.textContent = kw ? '没有匹配的文件' : '暂无已上传的数据文件';
+                return;
+            }
+            empty.style.display = 'none';
+            tbody.innerHTML = filtered.map(f => `
+                <tr>
+                    <td class="file-name-cell" title="${escHtml(f.name)}">
+                        <span class="file-icon">${/\.xlsx$/i.test(f.name) ? '📊' : '📄'}</span>${escHtml(f.name)}
+                    </td>
+                    <td><span class="badge ${/\.xlsx$/i.test(f.name) ? 'badge-mooc' : 'badge-touge'}">${/\.xlsx$/i.test(f.name) ? 'XLSX' : 'CSV'}</span></td>
+                    <td>${escHtml(f.size_str)}</td>
+                    <td>${escHtml(f.mtime)}</td>
+                    <td><button class="btn-del" data-name="${escHtml(f.name)}">删除</button></td>
+                </tr>`).join('');
+            tbody.querySelectorAll('.btn-del').forEach(btn => {
+                btn.addEventListener('click', () => deleteFile(btn.dataset.name, btn));
+            });
+        }
+
+        async function deleteFile(name, btn) {
+            if (!confirm(`确定删除数据文件「${name}」吗？\n对应的分析结果与归档报告将一并移除，且不可恢复。`)) return;
+            btn.disabled = true;
+            try {
+                const resp = await fetch('/api/data_files', {
+                    method: 'DELETE',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: name }),
+                });
+                const data = await resp.json();
+                if (!resp.ok || !data.ok) {
+                    alert(data.error || '删除失败');
+                    btn.disabled = false;
+                    return;
+                }
+                await loadFiles();
+            } catch (e) {
+                alert('删除失败：' + e.message);
+                btn.disabled = false;
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+            loadFiles();
+            document.getElementById('searchInput').addEventListener('input', renderFiles);
+        });
+    </script>
+</body>
+</html>

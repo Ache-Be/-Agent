@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>批量分析结果 | 教学预警系统</title>
+    <link rel="stylesheet" href="/static/css/common.css">
+    <style>
+        /* ===== 本页特有样式 ===== */
+        .error-msg { color: #dc2626; font-size: 13px; }
+        /* 结果表格自身呈现为一张卡片（区别于包在 report-card 内的表格） */
+        .result-table {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+            overflow: hidden;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-inner">
+            <h1>教学预警系统</h1>
+            <div class="header-links">
+                <a href="{{ url_for('index') }}">&larr; 返回上传</a>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="page-title">批量分析结果</div>
+
+        <div class="summary-card">
+            <div class="count">
+
+                共上传 <strong>{{ results|length }}</strong> 个文件，
+                成功 <strong>{{ success_count }}</strong> 个，
+                失败 <strong>{{ fail_count }}</strong> 个
+            </div>
+        </div>
+
+        <div class="table-wrap">
+        <table class="result-table">
+            <thead>
+                <tr>
+                    <th>文件名</th>
+                    <th>类型</th>
+                    <th>实验/班级名称</th>
+                    <th>学生数</th>
+                    <th>薄弱人数</th>
+                    <th>操作</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in results %}
+                <tr>
+                    <td style="max-width: 200px; overflow: hidden; text-overflow: ellipsis;" title="{{ r.original_name }}">
+                        {{ r.original_name }}
+                    </td>
+                    <td>
+                        {% if r.has_error %}
+                        <span class="badge badge-error">失败</span>
+                        {% else %}
+                        <span class="badge {% if r.source_type == 'touge' %}badge-touge{% else %}badge-mooc{% endif %}">
+                            {{ '头歌' if r.source_type == 'touge' else 'MOOC' }}
+                        </span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if r.has_error %}
+                        <span class="error-msg">{{ r.error_msg }}</span>
+                        {% else %}
+                        {{ r.experiment_name }}
+                        {% endif %}
+                    </td>
+                    <td>{{ r.student_count if r.source_type == 'touge' else '-' }}</td>
+                    <td>{{ r.weak_count if r.source_type == 'touge' else '-' }}</td>
+                    <td>
+                        {% if not r.has_error %}
+                        {% if r.source_type == 'touge' and r.report_stem %}
+                        <a class="btn-sm btn-view" href="{{ url_for('view_single_report', report_stem=r.report_stem) }}">查看</a>
+                        {% else %}
+                        <a class="btn-sm btn-view" href="{{ url_for('view_batch_report', filename=r.report_filename) }}">查看</a>
+                        {% endif %}
+                        <a class="btn-sm btn-dl" href="{{ url_for('download_report', filename=r.report_filename) }}">下载</a>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+
+        {% if agg_data %}
+        <!-- ====== 综合薄弱项分析 ====== -->
+        <div style="margin-top: 40px;">
+            <div class="section-title">综合薄弱项分析</div>
+
+            <div class="stats-grid">
+                <div class="item">
+                    <div class="num">{{ agg_data.experiment_count }}</div>
+                    <div class="lbl">实验数</div>
+                </div>
+                <div class="item">
+                    <div class="num">{{ agg_data.total_students }}</div>
+                    <div class="lbl">学生总数</div>
+                </div>
+                <div class="item">
+                    <div class="num">{{ agg_data.weak_student_count }}</div>
+                    <div class="lbl">有薄弱项的学生</div>
+                </div>
+                <div class="item">
+                    <a class="dl-link" href="{{ url_for('download_report', filename=agg_data.agg_filename) }}">下载汇总报告</a>
+                </div>
+            </div>
+
+            <!-- 学生列表（放前面，和单文件风格一致） -->
+            <div class="report-card">
+                <div class="card-header">学生薄弱概况（共{{ agg_data.total_students }}人，有薄弱项{{ agg_data.weak_student_count }}人）</div>
+                <div class="card-body">
+                    <div class="table-wrap">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>姓名</th>
+                                <th>学号</th>
+                                <th>薄弱子任务</th>
+                                <th>薄弱知识点</th>
+                                <th>薄弱率</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for s in agg_data.student_list if s.weak_count > 0 %}
+                            <tr>
+                                <td><strong>{{ s.name }}</strong></td>
+                                <td>{{ s.student_id }}</td>
+                                <td>{{ s.weak_count }}</td>
+                                <td>{{ s.weak_knowledge_names[:80] }}{{ '…' if s.weak_knowledge_names|length > 80 }}</td>
+                                <td>
+                                    <span class="rate-bar"><span class="fill" style="width:{{ s.weak_rate * 100 }}%"></span></span>
+                                    {{ (s.weak_rate * 100) | int }}%
+                                </td>
+                                <td style="white-space:nowrap;">
+                                    <a class="btn-sm btn-view" href="{{ url_for('view_student_aggregate', student_key=s._key) }}">查看</a>
+                                    <a class="btn-sm btn-dl" href="{{ url_for('download_student_aggregate', student_key=s._key) }}">导出</a>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                            {% if not agg_data.student_list %}
+                            <tr><td colspan="6" style="text-align:center;color:#999;">暂无学生数据</td></tr>
+                            {% endif %}
+                        </tbody>
+                    </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 易错知识点排行 -->
+            <div class="report-card">
+                <div class="card-header">知识点易错率排行（共{{ agg_data.weak_student_count }}人有薄弱项）</div>
+                <div class="card-body">
+                    <div class="table-wrap">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>知识点</th>
+                                <th>所属单元</th>
+                                <th>易错人数</th>
+                                <th>易错率</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for te in agg_data.top_error[:10] %}
+                            <tr>
+                                <td>{{ te.name }}</td>
+                                <td>{{ te.unit[:18] if te.unit else "-" }}</td>
+                                <td>{{ te.error_count }}人</td>
+                                <td>
+                                    <span class="rate-bar"><span class="fill" style="width:{{ te.error_rate * 100 }}%"></span></span>
+                                    {{ (te.error_rate * 100) | int }}%
+                                </td>
+                            </tr>
+                            {% endfor %}
+                            {% if not agg_data.top_error %}
+                            <tr><td colspan="4" style="text-align:center;color:#999;">暂无数据</td></tr>
+                            {% endif %}
+                        </tbody>
+                    </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+
+    <div class="footer">教学预警系统 v0.2</div>
+</body>
+</html>

@@ -1,0 +1,372 @@
+/* ============================================================
+   教学预警系统 - 公共样式
+   供 6 个模板统一引用；各模板仅保留自身特有样式
+   ============================================================ */
+
+/* ---------- Reset 与基础 ---------- */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+    font-family: -apple-system, "Microsoft YaHei", "PingFang SC", sans-serif;
+    background: #f0f2f5;
+    color: #333;
+}
+
+/* 滚动条 */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #d0d5dd; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #b3bac4; }
+
+/* ---------- 顶栏（渐变头部）---------- */
+.header {
+    background: linear-gradient(135deg, #1a73e8, #1557b0);
+    color: white;
+    padding: 20px 0;
+}
+.header-inner {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 0 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+.header h1 { font-size: 20px; font-weight: 600; }
+.header p { font-size: 14px; opacity: 0.85; }
+.header .header-links {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.header a {
+    color: white;
+    text-decoration: none;
+    font-size: 14px;
+    opacity: 0.9;
+    padding: 6px 16px;
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    border-radius: 6px;
+    transition: all 0.2s;
+}
+.header a:hover { opacity: 1; background: rgba(255, 255, 255, 0.12); }
+
+/* 打印按钮（顶栏内） */
+.btn-print {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: white;
+    font-size: 14px;
+    padding: 6px 16px;
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    border-radius: 6px;
+    background: transparent;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+.btn-print:hover { background: rgba(255, 255, 255, 0.12); }
+
+/* ---------- 布局 ---------- */
+.container {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 24px 20px;
+}
+
+/* 页面标题 */
+.report-title, .page-title {
+    font-size: 22px;
+    font-weight: 600;
+    margin-bottom: 20px;
+    color: #1a1a1a;
+}
+.section-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: #333;
+    margin-bottom: 12px;
+    padding-left: 12px;
+    border-left: 3px solid #1a73e8;
+}
+
+/* ---------- 卡片 ---------- */
+.card {
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+    padding: 32px;
+    margin-bottom: 20px;
+}
+.card h2 {
+    font-size: 18px;
+    font-weight: 600;
+    margin-bottom: 16px;
+    color: #1a73e8;
+}
+
+.report-card {
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+    margin-bottom: 20px;
+    overflow: hidden;
+}
+.summary-card {
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+    padding: 20px 24px;
+    margin-bottom: 20px;
+}
+.summary-card .count { font-size: 16px; color: #555; }
+.summary-card .count strong { color: #1a73e8; font-size: 20px; }
+
+.report-card .toolbar,
+.report-card .card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 14px 20px;
+    background: #f8f9fb;
+    border-bottom: 1px solid #e5e7eb;
+    font-size: 14px;
+    color: #555;
+}
+.report-card .toolbar span { font-size: 14px; color: #555; font-weight: 600; }
+.report-card .card-header { display: block; }
+.report-card .card-header h3 { font-size: 16px; font-weight: 600; color: #333; }
+.report-card .card-body { padding: 16px 20px; }
+
+/* 工具栏内的操作按钮（下载 / 打印） */
+.report-card .toolbar .toolbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+.report-card .toolbar a,
+.report-card .toolbar .btn-print {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 16px;
+    background: #1a73e8;
+    color: white;
+    text-decoration: none;
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+.report-card .toolbar a:hover,
+.report-card .toolbar .btn-print:hover { background: #1557b0; }
+
+/* 报告内容（等宽字体 pre-wrap） */
+.report-content {
+    padding: 20px;
+    font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
+    font-size: 13px;
+    line-height: 1.7;
+    white-space: pre-wrap;
+    overflow-x: auto;
+    color: #1a1a1a;
+    max-height: 70vh;
+    overflow-y: auto;
+}
+
+/* ---------- 统计卡片 ---------- */
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+    gap: 12px;
+    margin-bottom: 20px;
+}
+.stat-card, .stats-grid .item {
+    background: white;
+    border-radius: 10px;
+    padding: 16px;
+    text-align: center;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+}
+.stat-card .value, .stats-grid .item .num {
+    font-size: 24px;
+    font-weight: 700;
+    color: #1a73e8;
+}
+.stat-card .label, .stats-grid .item .lbl {
+    font-size: 13px;
+    color: #666;
+    margin-top: 4px;
+}
+
+/* ---------- 按钮 ---------- */
+.btn {
+    display: inline-block;
+    padding: 12px 32px;
+    background: #1a73e8;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-size: 16px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.2s;
+    width: 100%;
+    margin-top: 16px;
+}
+.btn:hover { background: #1557b0; }
+.btn:disabled { background: #a0c4ff; cursor: not-allowed; }
+
+.btn-sm, .btn-small {
+    display: inline-block;
+    padding: 5px 14px;
+    border-radius: 6px;
+    font-size: 13px;
+    text-decoration: none;
+    margin-right: 6px;
+    border: none;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+.btn-view { background: #1a73e8; color: white; }
+.btn-view:hover { background: #1557b0; }
+.btn-dl, .btn-download { background: #43a047; color: white; }
+.btn-dl:hover, .btn-download:hover { background: #2e7d32; }
+
+.dl-link {
+    display: inline-block;
+    padding: 7px 16px;
+    background: #1a73e8;
+    color: white;
+    text-decoration: none;
+    border-radius: 6px;
+    font-size: 13px;
+}
+.dl-link:hover { background: #1557b0; }
+
+/* ---------- 徽章 ---------- */
+.badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 10px;
+    font-size: 12px;
+    font-weight: 500;
+    margin-left: 10px;
+}
+.badge-touge { background: #e8f5e9; color: #2e7d32; }
+.badge-mooc { background: #e3f2fd; color: #1565c0; }
+.badge-error { background: #fef2f2; color: #dc2626; }
+.badge-question { background: #fce4ec; color: #c62828; }
+
+/* ---------- 表格 ---------- */
+.table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+.data-table, .result-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+.data-table th, .result-table th {
+    background: #f8f9fb;
+    padding: 10px 12px;
+    text-align: left;
+    font-weight: 600;
+    color: #555;
+    border-bottom: 2px solid #e5e7eb;
+}
+.data-table td, .result-table td {
+    padding: 10px 12px;
+    border-bottom: 1px solid #f0f0f0;
+    color: #333;
+}
+.data-table tr:hover td, .result-table tr:hover td { background: #f5f7fa; }
+.result-table tr:last-child td { border-bottom: none; }
+.result-table th { padding: 14px 16px; }
+.result-table td { padding: 14px 16px; font-size: 14px; }
+
+/* 比率条 */
+.rate-bar {
+    display: inline-block;
+    height: 6px;
+    border-radius: 3px;
+    background: #e0e0e0;
+    width: 80px;
+    vertical-align: middle;
+    margin-right: 6px;
+}
+.rate-bar .fill {
+    display: block;
+    height: 100%;
+    border-radius: 3px;
+    background: #ef5350;
+}
+
+/* ---------- Flash 提示 ---------- */
+.flash {
+    padding: 10px 16px;
+    margin: 0 0 8px;
+    border-radius: 8px;
+    font-size: 13px;
+    border: 1px solid transparent;
+}
+.flash.error { background: #fef2f2; color: #dc2626; border-color: #fecaca; }
+.flash.success { background: #f0fdf4; color: #16a34a; border-color: #bbf7d0; }
+.flash.warning { background: #fffbeb; color: #b45309; border-color: #fde68a; }
+
+/* ---------- 页脚 ---------- */
+.footer {
+    text-align: center;
+    padding: 20px;
+    color: #999;
+    font-size: 13px;
+}
+
+/* ---------- 响应式（手机 / 窄屏）---------- */
+@media (max-width: 768px) {
+    .container { padding: 16px 12px; }
+    .header { padding: 14px 0; }
+    .header h1 { font-size: 17px; }
+    .header-inner { padding: 0 12px; }
+    .report-title, .page-title { font-size: 18px; margin-bottom: 14px; }
+    .section-title { font-size: 14px; }
+    .card { padding: 20px 16px; }
+    .summary-card { padding: 16px; }
+    .report-card .toolbar, .report-card .card-header { padding: 12px 14px; flex-wrap: wrap; gap: 8px; }
+    .report-card .toolbar span { font-size: 13px; }
+    .report-card .card-body { padding: 12px 14px; }
+    .report-content { padding: 14px; font-size: 12px; max-height: none; }
+    .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+    .stat-card .value, .stats-grid .item .num { font-size: 20px; }
+    .data-table th, .data-table td,
+    .result-table th, .result-table td { padding: 8px; font-size: 12px; white-space: nowrap; }
+    .footer { padding: 14px; font-size: 12px; }
+}
+
+/* ---------- 打印 ---------- */
+@media print {
+    .header a, .btn-print,
+    .report-card .toolbar a, .dl-link, .btn-sm, .btn-small { display: none !important; }
+    body { background: white !important; }
+    .container { max-width: 100%; padding: 0; }
+    .card, .report-card, .summary-card, .stat-card, .stats-grid .item {
+        box-shadow: none !important;
+        border: 1px solid #ddd;
+        break-inside: avoid;
+    }
+    .report-card .toolbar, .report-card .card-header { background: white !important; border-bottom: 1px solid #ddd !important; }
+    .report-content {
+        white-space: pre-wrap;
+        max-height: none;
+        overflow: visible;
+        font-size: 11px;
+    }
+    .data-table th, .data-table td, .result-table th, .result-table td {
+        border: 1px solid #999;
+        background: white !important;
+        color: #000 !important;
+    }
+}
