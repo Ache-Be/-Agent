@@ -1,0 +1,40 @@
+# AGENTS.md — 教学预警系统 · 协作指南
+
+> **核心目标**：以需求为导向，实现高质量的功能交付。
+> **技术栈**：FastAPI (Python 3.10+) + Vue 3 (TS) + Element Plus + Vite。
+
+## 一、 开发原则与约束
+
+**1.1 技术对齐**
+- 后端：FastAPI 异步架构。路由定义在 `server/api/v1/*.py`，必须在 `server/api/routers.py` 注册。
+- 前端：Vue 3 `<script setup lang="ts">`。所有 HTTP 请求必须封装在 `src/api/*.ts`。
+- 构建：提交前确保 `npm.cmd run build` 通过，`vue-tsc` 无错误。
+
+**1.2 关键逻辑（严防回归）**
+- **上传判重**：基于文件 MD5 + 路径编码 (`safe_name`)。合并模式下使用组合指纹，避免同名文件冲突。
+- **学生聚合**：优先基于学号聚合。跨班/跨年重名需通过 `split_key` (sid#C#班级) 隔离。
+- **性能优化**：后端采用 30s TTL 全量缓存，前端使用 computed 内存过滤，确保切 Tab 无感。
+
+## 二、 目录结构简述
+
+- `server/`：后端核心。`api/` 处理请求，`services/` 处理逻辑，`core/` 存放配置与状态。
+- `frontend/`：前端 Vue 项目。`src/api/` 封装接口，`src/views/` 页面组件。
+- `analysis/`：独立解析层。负责 CSV/XLSX/Word 等各类教学数据的深度解析。
+- `data/` & `uploads/`：数据存储与文件副本。
+
+## 三、 常见坑点速查
+
+- **上传 422**：确保后端同时兼容 `file` 和 `files` 字段名。
+- **乱码问题**：Windows 环境下，BAT 脚本建议使用 GBK 编码，Python 输出强制包装为 UTF-8。
+- **路径处理**：统一使用 `pathlib.Path` 处理跨平台路径拼接。
+- **图标引用**：Element Plus 图标引用若导致 build 报错，请优先检查导入路径或更换同类图标。
+
+## 四、 交付检查项
+
+- [ ] Python 代码语法与核心逻辑冒烟通过。
+- [ ] 前端 TypeScript 检查无红浪，Vite 构建成功。
+- [ ] 新增路由已在 `routers.py` 中 include。
+- [ ] UI 改动符合直观性原则，无冗余指标。
+
+---
+*注：本指南旨在提供必要共识，实际开发以实现需求为第一优先级，过程中鼓励提出改进建议。*

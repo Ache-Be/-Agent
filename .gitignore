@@ -9,22 +9,23 @@ __pycache__/
 .idea/
 .vscode/
 
-# 运行产物
-output/
-startup_check.txt
+# 运行产物与上传数据
+server/uploads/
+server/data/conversations/
+server/config/analysis_snapshot.json
+server/config/settings.json
+server/logs/
 *.log
-web/logs/
-web/uploads/
-web/config/analysis_snapshot.json
-web/config/conversations/
+
+# 前端构建产物
+frontend/dist/
+frontend/node_modules/
 
 # 学生数据（隐私，不上传）
 头歌/
 MOOC/
-data/student_scores.csv
-data/qa_sediment/
+word+excel+pdf/
 data/knowledge/backups/
-data/knowledge/*.backup.csv
 
 # 临时文件
 *.tmp

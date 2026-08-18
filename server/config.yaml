@@ -1,0 +1,36 @@
+# 教学预警系统后端配置
+initialized: true
+app:
+  name: "教学预警系统 API"
+  version: "1.0.0"
+  host: "0.0.0.0"
+  port: 9090
+  env: "dev"
+  api_prefix: "/api"
+  reload: true
+  api_status_enabled: true
+  secret_key: "teaching-warning-system-secret-key-2026"
+upload:
+  max_size_mb: 16
+  allow_ext: [".csv", ".docx", ".xlsx"]
+  upload_dir: "uploads"
+  report_dir: "uploads/reports"
+  temp_dir: "uploads/_temp"
+conv:
+  max_conversations: 50
+  history_keep_last: 20
+report:
+  max_txt_archive: 3000
+knowledge:
+  csv_path: "../data/knowledge/knowledge_base.csv"
+  backup_dir: "../data/knowledge/backups"
+  backup_max: 20
+logging:
+  dir: "logs"
+  max_bytes_mb: 10
+  backup_count: 3
+cors:
+  origins:
+    - "http://localhost:5173"
+    - "http://localhost:9090"
+    - "*"

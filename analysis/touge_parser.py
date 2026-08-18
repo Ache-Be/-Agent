@@ -27,10 +27,19 @@ TASK_PREFIX = "task"  # task1_name, task1_game_score, ...
 
 
 def parse_filename(filepath: str) -> Dict:
-    """从头歌 CSV 文件名中解析出实验 ID 和实验名称"""
-    name = Path(filepath).stem  # 去掉 .csv
-    # 匹配 "1093149_Java入门1-基本语法" 格式
-    m = re.match(r"(\d+)_(.+)", name)
+    """从头歌 CSV 文件名中解析出实验 ID 和实验名称。
+    兼容两种文件名格式：
+      1. 原始 CSV 文件名：<数字ID>_<实验名称>.csv（match 从开头匹配）
+      2. safe_name 编码后：<路径前缀__...___<数字ID>_<实验名称>.csv（路径前缀被替换成了双下划线 + 中文替换成下划线）
+         这时从末尾反向匹配，避免路径前缀干扰数字正则。
+    """
+    name = Path(filepath).stem
+    # 模式 1：原始格式（以数字开头，5 位以上）
+    m = re.match(r"(\d{5,})_(.+)", name)
+    if m:
+        return {"experiment_id": m.group(1), "experiment_name": m.group(2)}
+    # 模式 2：safe_name 末尾格式 —— __ 或 ___ 之后紧跟 5 位以上数字 _ 名称结束
+    m = re.search(r"_{2,3}(\d{5,})_(.+)$", name)
     if m:
         return {"experiment_id": m.group(1), "experiment_name": m.group(2)}
     return {"experiment_id": "", "experiment_name": name}

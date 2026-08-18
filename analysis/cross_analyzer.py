@@ -9,7 +9,7 @@
 """
 
 from collections import defaultdict
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Set, Tuple
 from datetime import datetime
 import re
 
@@ -18,6 +18,81 @@ from analysis.config import load_config
 
 # 正确率低于此阈值视为薄弱/易错（可在 web/config/settings.json 中调整）
 WEAK_THRESHOLD = load_config()["weak_threshold"]
+
+
+# 年份正则：抓 2020~2099 之间的 4 位数；再兜底 19xx / 2 位简写年份（19~99 → 20xx）
+_YEAR_RE = re.compile(r"(?<!\d)(20[0-9]{2})(?!\d)")
+_SHORT_YEAR_RE = re.compile(r"(?<!\d)([1-9][0-9])(?!\d)")
+
+# 班级正则：抓"软件/计算机/机电/Java/苏理工/人工智能/大数据/软工/计科"等常见系 + 数字+班；兜底 xxxx班
+_CLASS_TOKEN_RE = re.compile(r"[\u4e00-\u9fa5A-Za-z]{1,8}?\s*\d+\s*班")
+# 直接包含"班"字的简单词
+_CLASS_HINT_RE = re.compile(r"[\u4e00-\u9fa5A-Za-z0-9]{1,12}?班")
+
+
+def _extract_years(*texts: str) -> Set[str]:
+    """从任意组字符串中提取出现的 4 位年份集合，兜底 2 位年份按 20xx 补全"""
+    out: Set[str] = set()
+    for t in texts:
+        if not t:
+            continue
+        # 特殊处理：如果文本是长学号（10位以上数字），前两位通常是年份简写
+        if t.isdigit() and len(t) >= 10:
+            yy_str = t[:2]
+            try:
+                yy = int(yy_str)
+                if 10 <= yy <= 30: # 假设是 2010~2030 之间的入学者
+                    out.add(f"20{yy:02d}")
+            except Exception:
+                pass
+
+        for m in _YEAR_RE.findall(t):
+            out.add(m)
+        if not out:
+            for m in _SHORT_YEAR_RE.findall(t):
+                try:
+                    yy = int(m)
+                except Exception:
+                    continue
+                if 19 <= yy <= 99:
+                    out.add(f"20{yy:02d}")
+    return out
+
+
+def _extract_class_names(*texts: str) -> Set[str]:
+    """从任意组字符串中提取疑似班级名（出现"班"字优先，其次常见专业+数字班模式）"""
+    out: Set[str] = set()
+    for t in texts:
+        if not t:
+            continue
+        # 特殊处理：如果文本看起来像长学号（8位以上数字），尝试从中提取班级信息
+        # 例如 232219605120 -> 23级某专业
+        if t.isdigit() and len(t) >= 10:
+            year = t[:2]
+            major = t[2:8]
+            # 这里只是粗略推断，暂不作为强班级名，仅做辅助
+            # out.add(f"{year}级{major}") 
+            pass
+
+        for m in _CLASS_TOKEN_RE.findall(t):
+            out.add(m.strip())
+        if not out:
+            for m in _CLASS_HINT_RE.findall(t):
+                out.add(m.strip())
+    return out
+
+
+def _make_split_key(base_sid: str, class_names: Set[str]) -> str:
+    """
+    同学生（同 base_sid）但来自不同班级 → 聚合时拆成两条，避免跨班/跨年重名成绩相互污染。
+    优先级：
+      1. 班级集合不为空 → base_sid + '#C#' + 排序后第一班名
+      2. 否则直接用 base_sid（保持历史聚合键不变，不破坏旧报告 safe_key）
+    """
+    if not class_names:
+        return base_sid
+    first_class = sorted(class_names)[0]
+    return f"{base_sid}#C#{first_class}"
 
 
 # 中文数字 → 整数
@@ -85,7 +160,7 @@ def aggregate_students(
         }
     """
     # 按学生聚合所有子任务数据
-    # student_map: student_id -> {name, sid, tasks: [{exp, subtask, score, max_score, rate, knowledge}], quizzes: [...]}
+    # student_map: split_key(=sid 或 sid#C#班名) -> {name, sid, tasks, quizzes, experiments, class_names, detected_years}
     student_map = defaultdict(lambda: {
         "name": "",
         "student_id": "",
@@ -93,6 +168,9 @@ def aggregate_students(
         "tasks": [],
         "quizzes": [],
         "experiments": set(),
+        "class_names": set(),
+        "detected_years": set(),
+        "base_sid": "",
     })
 
     # 姓名 → 真实学号（来自随堂测验，学号完整）。用于把实验 CSV 中的脱敏学号关联到真实学号
@@ -110,6 +188,9 @@ def aggregate_students(
 
     for exp_result in experiment_results:
         exp_name = exp_result.get("experiment_name", "")
+        file_name = exp_result.get("file_path") or exp_result.get("filename") or ""
+        exp_class_names = _extract_class_names(exp_name, file_name, exp_result.get("class_name", ""))
+        exp_years = _extract_years(exp_name, file_name, str(exp_result.get("uploaded_name", "")))
         students = exp_result.get("students", [])
         task_stats = exp_result.get("task_stats", {})
 
@@ -126,11 +207,30 @@ def aggregate_students(
                 # 找不到同名学生时，用姓名作为聚合键（避免脱敏学号碰撞把不同学生合并）
                 sid = name_to_sid.get(sname) or f"name:{sname}"
 
-            student = student_map[sid]
+            # 计算本次学生对应的班级集合：实验级 + 学生自身 class_name
+            this_class_names: Set[str] = set(exp_class_names)
+            s_class = s.get("class_name")
+            if isinstance(s_class, str) and s_class.strip():
+                for c in _extract_class_names(s_class):
+                    this_class_names.add(c)
+            this_years: Set[str] = set(exp_years)
+            for y in _extract_years(s_class or "", s.get("group_name", "") or ""):
+                this_years.add(y)
+
+            # 同一个 base_sid + 不同班级 → 拆成两条聚合（跨班/跨年重名隔离）
+            base_sid = sid
+            split_key = _make_split_key(base_sid, this_class_names)
+
+            student = student_map[split_key]
             student["name"] = sname
             student["student_id"] = sid
             student["raw_student_id"] = raw_sid
+            student["base_sid"] = base_sid
             student["experiments"].add(exp_name)
+            for c in this_class_names:
+                student["class_names"].add(c)
+            for y in this_years:
+                student["detected_years"].add(y)
 
             for tid, ts in sorted(task_stats.items(), key=lambda x: int(x[0].replace("task", ""))):
                 max_score = ts.get("max_score", 0)
@@ -170,7 +270,7 @@ def aggregate_students(
 
                 student["tasks"].append(task_entry)
 
-    # ---- 合并随堂测验章节成绩（按学号） ----
+    # ---- 合并随堂测验章节成绩（按学号+班级拆分键） ----
     quiz_count = 0
     for quiz in quiz_results or []:
         if "error" in quiz:
@@ -178,6 +278,10 @@ def aggregate_students(
         quiz_count += 1
         chapter = quiz.get("chapter_name", "") or quiz.get("filename", "")
         project_id = quiz.get("project_id", "")
+        quiz_class_name = quiz.get("class_name", "") or ""
+        quiz_filename = quiz.get("uploaded_name") or quiz.get("filename") or ""
+        quiz_classes = _extract_class_names(quiz_class_name, quiz_filename, chapter)
+        quiz_years = _extract_years(quiz_class_name, quiz_filename, chapter)
         for qs in quiz.get("students", []):
             sid = qs.get("student_id", "")
             if not sid:
@@ -188,14 +292,28 @@ def aggregate_students(
             # 跳过未参与本次测验的学生（参与答题数为0），未参与≠薄弱
             if not (qs.get("answer_count") or 0) > 0:
                 continue
-            student = student_map[sid]
+            q_class = qs.get("class_name", "") or ""
+            this_class_names: Set[str] = set(quiz_classes)
+            for c in _extract_class_names(q_class):
+                this_class_names.add(c)
+            this_years: Set[str] = set(quiz_years)
+            for y in _extract_years(q_class):
+                this_years.add(y)
+            base_sid = sid
+            split_key = _make_split_key(base_sid, this_class_names)
+            student = student_map[split_key]
             student["name"] = qs.get("name", student["name"])
             student["student_id"] = sid
             student["raw_student_id"] = qs.get("student_id", "")
+            student["base_sid"] = base_sid
+            for c in this_class_names:
+                student["class_names"].add(c)
+            for y in this_years:
+                student["detected_years"].add(y)
             student["quizzes"].append({
                 "project_id": project_id,
                 "chapter": chapter,
-                "class_name": qs.get("class_name", ""),
+                "class_name": q_class or (sorted(this_class_names)[0] if this_class_names else ""),
                 "score": qs.get("score") or 0,
                 "total_score": quiz.get("total_score") or 0,
                 "accuracy": qs.get("accuracy") or 0,
@@ -204,10 +322,24 @@ def aggregate_students(
     # 构建返回结构
     student_list = []
     students_output = {}
+    # 用于整体 AI 上下文展示清单：全部班级/年份/实验名
+    _all_classes: Set[str] = set()
+    _all_years: Set[str] = set()
+    _all_experiments: Set[str] = set()
 
-    for sid, data in student_map.items():
+    for split_key, data in student_map.items():
         # 对外展示的学号：优先真实学号；纯姓名键（name:xxx）时展示原始（可能脱敏）学号
-        display_sid = data.get("raw_student_id") or ("" if str(sid).startswith("name:") else sid)
+        base_sid = data.get("base_sid") or split_key
+        display_sid = data.get("raw_student_id") or ("" if str(base_sid).startswith("name:") else base_sid)
+        # 班级名也可作为 display 后缀，但不写入 student_id 本身（避免下游当作学号解析）
+        class_names: Set[str] = data.get("class_names") or set()
+        detected_years: Set[str] = data.get("detected_years") or set()
+        for c in class_names:
+            _all_classes.add(c)
+        for y in detected_years:
+            _all_years.add(y)
+        for exp in (data.get("experiments") or set()):
+            _all_experiments.add(exp)
         weak_count = sum(1 for t in data["tasks"] if t["weak"])
         total_tasks = len(data["tasks"])
         weak_rate = weak_count / total_tasks if total_tasks > 0 else 0
@@ -242,9 +374,13 @@ def aggregate_students(
         for kw in weak_knowledge:
             unit_weakness[kw["unit"] or "未分类"].append(kw)
 
+        student_classes_sorted = sorted(class_names)
+        student_years_sorted = sorted(detected_years)
         student_info = {
             "name": data["name"],
             "student_id": display_sid,
+            "class_names": student_classes_sorted,
+            "detected_years": student_years_sorted,
             "experiment_count": len(data["experiments"]),
             "total_subtasks": total_tasks,
             "weak_count": weak_count,
@@ -259,10 +395,13 @@ def aggregate_students(
             "quiz_weak_chapters": quiz_weak_names,
             "quiz_avg_accuracy": quiz_avg,
         }
-        students_output[sid] = student_info
+        students_output[split_key] = student_info
+        # 列表也带班级/年份（方便搜索"某某班"时直接命中）
         student_list.append({
             "name": data["name"],
             "student_id": display_sid,
+            "class_names": student_classes_sorted,
+            "detected_years": student_years_sorted,
             "experiment_count": len(data["experiments"]),
             "total_subtasks": total_tasks,
             "weak_count": weak_count,
@@ -316,6 +455,10 @@ def aggregate_students(
         "experiment_count": len(experiment_results),
         "quiz_count": quiz_count,
         "total_students": len(student_map),
+        # 新增：整体班级/年份/实验名清单，供 AI 上下文直接枚举匹配用户问题"某某年某班"
+        "all_class_names": sorted(_all_classes),
+        "all_detected_years": sorted(_all_years),
+        "all_experiment_names": sorted(_all_experiments),
     }
 
 

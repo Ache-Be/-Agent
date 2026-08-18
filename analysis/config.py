@@ -1,8 +1,8 @@
 """
 统一配置：薄弱判定等分析参数。
 
-配置来源：web/config/settings.json（与 Web 系统共用），未配置时使用默认值。
-修改配置后需重启服务/重新运行分析才生效。
+配置来源：server/config/settings.json（与 FastAPI 后端共用），未配置时使用默认值。
+修改配置后：调用 api /config POST 即可：清 _cache → 重新聚合 → 立刻生效。
 """
 
 import json
@@ -20,8 +20,9 @@ DEFAULT_CONFIG = {
     "exclude_names": ["卢冶"],
 }
 
-# 与 Web 端共用同一个配置文件
-CONFIG_FILE = Path(__file__).resolve().parent.parent / "web" / "config" / "settings.json"
+# 统一使用 server/config/settings.json（后端会写这个文件）
+CONFIG_FILE = Path(__file__).resolve().parent.parent / "server" / "config" / "settings.json"
+# 向后兼容：如果 server/config/settings.json 不存在但旧 web/config/settings.json 有数据，则也会被 load 时当作 fallback（load_config 这里保留简单，默认值够用）
 
 _cache: Dict = {}
 
