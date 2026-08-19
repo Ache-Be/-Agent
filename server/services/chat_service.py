@@ -22,6 +22,19 @@ from datetime import datetime
 
 from analysis.qa_sediment import save_qa, retrieve_qa, format_qa_ref, load_qa_logs, count_qa
 
+# ============================================================
+# 新架构：RAG 混合检索 Prompt 组装（pgvector + LLM）
+# 若 pgvector 未就绪，回退到旧的 build_analysis_context + state.latest_agg_data 链路
+# ============================================================
+def _build_rag_system_prompt(user_msg: str) -> Tuple[str, Optional[List[float]]]:
+    try:
+        from services import rag_service
+        sys_prompt, q_vec, _intent = rag_service.build_system_prompt(user_msg)
+        return sys_prompt, q_vec
+    except Exception as e:
+        logger.warning("RAG prompt 构建失败，回退旧链路：%s", e)
+        return "", None
+
 
 # ============================================================
 # 知识库检索（原 web.ai_assistant.retrieve_knowledge / format_knowledge_ref）
@@ -313,43 +326,69 @@ def chat_stream(user_msg: str, conv_id: Optional[str] = None) -> Generator[str, 
         conv = {"id": cid, "title": "新对话", "created_at": now, "pinned": False, "messages": []}
     messages = conv.get("messages", [])
 
-    system_content = (
-        "你是一位教学预警系统的 AI 教学助手，职责是帮助教师分析学生实验数据。回答简洁、以数据为依据。"
-        "如果当前没有可用的分析数据，或用户询问的数据不在你掌握的结果范围内，请如实告知"
-        "（说明缺少哪部分数据），并提示用户先上传相应的 CSV/XLSX 数据文件，严禁编造学生成绩。"
-        "学生姓名与学号属于教学分析数据：当用户询问学生名单、点名或具体学生时，"
-        "可直接依据上下文中的『全部学生名单』如实列出，无需以隐私为由拒绝。"
-        "当用户要求生成报告（如班级整体学习情况、学生个人报告、薄弱项分析等）时，"
-        "请以清晰的 Markdown 结构输出：使用标题层级、表格、要点列表组织内容。"
-    )
-    ad = state.latest_agg_data
-    if ad:
-        context = build_analysis_context(
-            student_list=ad.get("student_list", []),
-            top_error=ad.get("top_error", []),
-            total_students=ad.get("total_students", 0),
-            weak_count=ad.get("weak_student_count", 0),
-            experiment_count=ad.get("experiment_count", 0),
-            quiz_count=ad.get("quiz_count", 0),
-            unit_results=state.latest_unit_results,
-            attendance_results=state.latest_attendance_results,
-            prediction_text=ad.get("prediction_text", ""),
-            all_class_names=ad.get("all_class_names", []),
-            all_detected_years=ad.get("all_detected_years", []),
-            all_experiment_names=ad.get("all_experiment_names", []),
-        )
-        system_content = f"{system_content}\n\n{context}"
+    # 初始化变量：避免后续 save_qa 引用时 NameError（任一链路都会赋值，但初始化更稳）
+    hit_records: List[Dict] = []
 
-    recent_ctx = _recent_upload_context()
-    if recent_ctx:
-        system_content = f"{system_content}\n\n{recent_ctx}"
-    hit_records = retrieve_knowledge(user_msg, state.knowledge_base or [])
-    kb_ref = format_knowledge_ref(hit_records)
-    if kb_ref:
-        system_content = f"{system_content}\n\n{kb_ref}"
-    qa_ref = format_qa_ref(retrieve_qa(user_msg, top_k=2))
-    if qa_ref:
-        system_content = f"{system_content}\n\n{qa_ref}"
+    # =============== [NEW] 优先新链路 RAG system prompt ===============
+    rag_system_prompt, query_vec = _build_rag_system_prompt(user_msg)
+    system_content = ""
+    if rag_system_prompt:
+        system_content = rag_system_prompt
+    else:
+        # ---- 旧链路兜底（保证 pgvector 不可用也能回答）----
+        system_content = (
+            "你是一位教学预警系统的 AI 教学助手，职责是帮助教师分析学生实验数据。回答简洁、以数据为依据。"
+            "如果当前没有可用的分析数据，或用户询问的数据不在你掌握的结果范围内，请如实告知"
+            "（说明缺少哪部分数据），并提示用户先上传相应的 CSV/XLSX 数据文件，严禁编造学生成绩。"
+            "学生姓名与学号属于教学分析数据：当用户询问学生名单、点名或具体学生时，"
+            "可直接依据上下文中的『全部学生名单』如实列出，无需以隐私为由拒绝。"
+            "当用户要求生成报告（如班级整体学习情况、学生个人报告、薄弱项分析等）时，"
+            "请以清晰的 Markdown 结构输出：使用标题层级、表格、要点列表组织内容。"
+        )
+        ad = state.latest_agg_data
+        if ad:
+            context = build_analysis_context(
+                student_list=ad.get("student_list", []),
+                top_error=ad.get("top_error", []),
+                total_students=ad.get("total_students", 0),
+                weak_count=ad.get("weak_student_count", 0),
+                experiment_count=ad.get("experiment_count", 0),
+                quiz_count=ad.get("quiz_count", 0),
+                unit_results=state.latest_unit_results,
+                attendance_results=state.latest_attendance_results,
+                prediction_text=ad.get("prediction_text", ""),
+                all_class_names=ad.get("all_class_names", []),
+                all_detected_years=ad.get("all_detected_years", []),
+                all_experiment_names=ad.get("all_experiment_names", []),
+            )
+            system_content = f"{system_content}\n\n{context}"
+
+        recent_ctx = _recent_upload_context()
+        if recent_ctx:
+            system_content = f"{system_content}\n\n{recent_ctx}"
+        hit_records = retrieve_knowledge(user_msg, state.knowledge_base or [])
+        kb_ref = format_knowledge_ref(hit_records)
+        if kb_ref:
+            system_content = f"{system_content}\n\n{kb_ref}"
+        qa_ref = format_qa_ref(retrieve_qa(user_msg, top_k=2))
+        if qa_ref:
+            system_content = f"{system_content}\n\n{qa_ref}"
+
+    # =============== 新链路：额外补 MOOC 知识库 & 旧 QA & 最近上传 上下文 ===============
+    if rag_system_prompt:
+        # MOOC 知识库（知识点参考）
+        hit_records = retrieve_knowledge(user_msg, state.knowledge_base or [])
+        kb_ref = format_knowledge_ref(hit_records)
+        if kb_ref:
+            system_content = f"{system_content}\n\n{kb_ref}"
+        # 旧 qa_logs.jsonl 的沉淀（历史问答）
+        qa_ref = format_qa_ref(retrieve_qa(user_msg, top_k=2))
+        if qa_ref:
+            system_content = f"{system_content}\n\n{qa_ref}"
+        # 最近上传文件摘要
+        recent_ctx = _recent_upload_context()
+        if recent_ctx:
+            system_content = f"{system_content}\n\n{recent_ctx}"
 
     built_messages: List[Dict[str, str]] = [{"role": "system", "content": system_content}]
     built_messages.extend(messages[-20:])
@@ -377,7 +416,20 @@ def chat_stream(user_msg: str, conv_id: Optional[str] = None) -> Generator[str, 
             conversation_id=conv["id"],
         )
     except Exception as e:
-        logger.warning("问答沉淀失败: %s", e)
+        logger.warning("老版问答沉淀(qa_logs.jsonl)失败: %s", e)
+
+    # ---- [NEW] 新版：pgvector 里也存一份（支持后续 RAG 历史语义检索）----
+    try:
+        if query_vec:
+            from core.db import pg_store
+            pg_store.save_qa(
+                q=user_msg, a=reply,
+                hit_knowledge=[r.get("视频/知识点名称", "") for r in hit_records],
+                conv_id=conv["id"],
+                embedding=query_vec,
+            )
+    except Exception as e:
+        logger.warning("新版 pgvector QA 沉淀失败（不影响流式回答）: %s", e)
 
     messages.append({"role": "assistant", "content": reply})
     conv["messages"] = messages

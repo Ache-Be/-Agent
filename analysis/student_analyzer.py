@@ -133,6 +133,30 @@ def analyze_student_weakness(
     }
 
 
+# 需要排除的教师/管理员姓名（可在 web/config/settings.json 的 exclude_names 中调整）
+EXCLUDED_NAMES = set(load_config()["exclude_names"])
+
+
+def is_real_student(name: str) -> bool:
+    """
+    判断是否为真实学生姓名（过滤测试账号、教师、实验标题等）。
+    """
+    if not name or not name.strip():
+        return False
+    name = name.strip()
+    if name in EXCLUDED_NAMES:
+        return False
+    # 如果姓名中不包含任何中文字符，视为非真实学生
+    if not re.search(r'[\u4e00-\u9fff]', name):
+        return False
+    # 过滤疑似实验标题的长字符串
+    if len(name) > 6:
+        bad_keywords = ["实验", "练习", "项目", "测试", "作业", "202", "汇总", "分析"]
+        if any(k in name for k in bad_keywords):
+            return False
+    return True
+
+
 def analyze_all_students(
     experiment_result: Dict, knowledge_base: List[Dict]
 ) -> Dict:
@@ -159,6 +183,9 @@ def analyze_all_students(
     # 逐个学生分析
     student_results = []
     for s in students:
+        # 兜底过滤非真实学生
+        if not is_real_student(s.get("name", "")):
+            continue
         result = analyze_student_weakness(s, subtask_mapping, task_stats)
         student_results.append(result)
 

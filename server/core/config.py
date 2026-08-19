@@ -97,7 +97,6 @@ class _Config:
 
     @property
     def knowledge_csv(self) -> Path:
-        # config.yaml 里是相对 server/ 的路径，要解析
         raw = self.get("knowledge.csv_path", "../data/knowledge/knowledge_base.csv")
         p = (BASE_DIR / raw).resolve()
         return p
@@ -109,5 +108,95 @@ class _Config:
         p.mkdir(parents=True, exist_ok=True)
         return p
 
+    # ========== 新增：PostgreSQL + pgvector ==========
+    @property
+    def db_host(self) -> str:
+        return str(self.get("database.host", "127.0.0.1"))
+
+    @property
+    def db_port(self) -> int:
+        return int(self.get("database.port", 5432))
+
+    @property
+    def db_user(self) -> str:
+        return str(self.get("database.user", "postgres"))
+
+    @property
+    def db_password(self) -> str:
+        return str(self.get("database.password", ""))
+
+    @property
+    def db_database(self) -> str:
+        return str(self.get("database.database", "teaching_warning"))
+
+    @property
+    def db_pool_size(self) -> int:
+        return int(self.get("database.pool_size", 10))
+
+    @property
+    def db_max_overflow(self) -> int:
+        return int(self.get("database.max_overflow", 20))
+
+    @property
+    def db_pool_timeout(self) -> int:
+        return int(self.get("database.pool_timeout", 30))
+
+    @property
+    def db_echo(self) -> bool:
+        return bool(self.get("database.echo", False))
+
+    def build_db_url(self, driver: str = "postgresql+psycopg2") -> str:
+        from urllib.parse import quote_plus
+        pwd = quote_plus(self.db_password) if self.db_password else ""
+        auth = f"{self.db_user}:{pwd}@" if pwd else f"{self.db_user}@"
+        return f"{driver}://{auth}{self.db_host}:{self.db_port}/{self.db_database}"
+
+    # ========== 新增：Embedding 配置 ==========
+    @property
+    def embedding_provider(self) -> str:
+        return str(self.get("embedding.provider", "sentence_transformers"))
+
+    @property
+    def embedding_model_name(self) -> str:
+        return str(self.get("embedding.model_name", "BAAI/bge-small-zh-v1.5"))
+
+    @property
+    def embedding_vector_dim(self) -> int:
+        return int(self.get("embedding.vector_dim", 512))
+
+    @property
+    def embedding_max_seq_length(self) -> int:
+        return int(self.get("embedding.max_seq_length", 512))
+
+    @property
+    def embedding_batch_size(self) -> int:
+        return int(self.get("embedding.batch_size", 64))
+
+    @property
+    def embedding_cache_dir(self) -> Path:
+        raw = self.get("embedding.cache_dir", "../data/models")
+        p = (BASE_DIR / raw).resolve()
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
+    # ========== 新增：数据清洗规则 ==========
+    @property
+    def cleaning_teacher_names(self) -> List[str]:
+        return [str(x) for x in (self.get("cleaning.teacher_names", []) or [])]
+
+    @property
+    def cleaning_noise_keywords(self) -> List[str]:
+        return [str(x) for x in (self.get("cleaning.noise_keywords", []) or [])]
+
+    @property
+    def cleaning_student_id_regex(self) -> List[str]:
+        return [str(x) for x in (self.get("cleaning.student_id_regex", []) or [])]
+
+    @property
+    def cleaning_name_len_range(self) -> tuple:
+        r = self.get("cleaning.name_len_range", [2, 4])
+        return (int(r[0]), int(r[1]))
+
 
 config = _Config()
+

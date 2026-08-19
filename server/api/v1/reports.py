@@ -59,17 +59,17 @@ def _stats_summary(result, source_type: str) -> List[Dict[str, Any]]:
 import re as _re
 import time as _time
 
-# 姓名：中文2~8个连续汉字
-_NAME_RE = _re.compile(r"[\u4e00-\u9fa5]{2,8}")
-# 学号：允许 2~20 位数字，中间可能夹杂下划线（处理头歌等平台导出的混乱 ID）
-_SID_RE = _re.compile(r"\d[\d_]{1,19}\d")
-# 姓名+学号紧邻模式：[姓名] [零或多个 _ / - / 空格] [学号]
+# 姓名：中文2~4个连续汉字（严格限定，避免"Java入门"/"循环与分支"等长词误判）
+_NAME_RE = _re.compile(r"[\u4e00-\u9fa5]{2,4}")
+# 学号：严格 >=8 位的数字串（避免 3523634 这种 7 位实验编号被误判）
+_SID_RE = _re.compile(r"\d{8,20}")
+# 姓名+学号紧邻模式：[姓名2-4字] [分隔符0-3个] [学号>=8位]（限定分隔符数量，避免跨段匹配）
 _NAME_SID_NEAR_RE = _re.compile(
-    r"([\u4e00-\u9fa5]{2,8})[\s_\-]{0,15}(\d[\d_]{1,19}\d)"
+    r"([\u4e00-\u9fa5]{2,4})[\s_\-]{0,3}(\d{8,20})"
 )
-# 学号+姓名紧邻模式（学号在前，姓名在后）：[学号] [零或多个 _ / - / 空格] [姓名]
+# 学号+姓名紧邻模式：[学号>=8位] [分隔符0-3个] [姓名2-4字]
 _SID_NAME_NEAR_RE = _re.compile(
-    r"(\d[\d_]{1,19}\d)[\s_\-]{0,15}([\u4e00-\u9fa5]{2,8})"
+    r"(\d{8,20})[\s_\-]{0,3}([\u4e00-\u9fa5]{2,4})"
 )
 # 非姓名的 2-6 字中文词黑名单（文件名常见前缀/技术术语，绝不可能是学生姓名）
 _NAME_BLACKLIST = frozenset([
@@ -165,7 +165,6 @@ async def api_list_reports(type: str = "all"):
     """
     report_dir = config.report_dir
 
-    # 1. 取全量 30s 缓存（所有 type 共享，切 tab 零扫盘）
     now_ts = _time.time()
     cached = _LIST_CACHE.get("all")
     all_items: List[Dict[str, Any]] = []
@@ -173,20 +172,21 @@ async def api_list_reports(type: str = "all"):
         all_items = cached[1]
     else:
         def _classify(name: str) -> str:
-            if name.startswith("汇总_") or name.startswith("学生综合汇总"):
-                return "summary"
-            if name.startswith("个人_"):
-                return "student"
-            if name.startswith("题目报告_"):
-                return "question"
-            # 前缀强约束：学生_ 直接算（最可信），其他必须靠严格的 _extract_student_display 提取
-            if name.startswith("学生_"):
-                return "student"
-            if name.startswith("报告_"):
-                return "single"
-            # 按内容严格判断：必须满足姓名黑名单+紧邻+长度校验
-            if _extract_student_display(Path(name).stem):
-                return "student"
+            try:
+                if name.startswith("汇总_") or name.startswith("学生综合汇总"):
+                    return "summary"
+                if name.startswith("个人_"):
+                    return "student"
+                if name.startswith("题目报告_"):
+                    return "question"
+                if name.startswith("学生_"):
+                    return "student"
+                if name.startswith("报告_"):
+                    return "single"
+                if _extract_student_display(Path(name).stem):
+                    return "student"
+            except Exception:
+                pass
             return "other"
 
         entries: List[Tuple[float, Dict[str, Any]]] = []
@@ -196,13 +196,19 @@ async def api_list_reports(type: str = "all"):
                     if not de.is_file() or de.suffix.lower() != ".txt":
                         continue
                     name = de.name
-                    category = _classify(name)
                     st = de.stat(follow_symlinks=False)
                     stem = de.stem
                     sname = _extract_student_display(stem)
                     student_name = student_id = ""
                     if sname and "_" in sname:
-                        student_name, student_id = sname.split("_", 1)
+                        _parts = sname.split("_", 1)
+                        if len(_parts) == 2:
+                            student_name, student_id = _parts
+                    if student_id and len(student_id) < 8:
+                        student_id = ""
+                    category = _classify(name)
+                    if category == "student" and not student_id and not _is_real_name(student_name):
+                        category = "other"
                     item = {
                         "name": name,
                         "display_name": _friendly_display(name),
@@ -214,50 +220,80 @@ async def api_list_reports(type: str = "all"):
                         "mtime": datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M"),
                     }
                     entries.append((st.st_mtime, item))
-                except OSError:
+                except Exception:
                     continue
-        entries.sort(key=lambda x: -x[0])
+        try:
+            entries.sort(key=lambda x: -x[0])
+        except Exception:
+            pass
         all_items = [x[1] for x in entries]
-        # 30s 单 entry 缓存（不分 type）
         _LIST_CACHE["all"] = (now_ts + 30.0, all_items, len(all_items))
 
-    # 2. 内存按 type 过滤（毫秒级，不再扫盘）
-    if type == "all":
-        items = all_items
-    elif type == "student":
-        # 学生类去重逻辑：按 student_id (或 name) 分组，每个学生仅保留一个最权威报告
-        # 优先级：学生_ (跨实验综合) > 个人_ (单次实验)；同类则取最新 (mtime)
+    def _dedup_students(student_list: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         student_groups: Dict[str, List[Dict[str, Any]]] = {}
-        for it in all_items:
-            if it.get("category") != "student":
-                continue
-            # 唯一标识：优先用学号，没学号用姓名
-            sid = it.get("student_id")
-            sname = it.get("student_name")
-            key = sid if sid else sname
-            if not key:
-                continue
-            if key not in student_groups:
-                student_groups[key] = []
-            student_groups[key].append(it)
+        for it in student_list:
+            try:
+                sid = str(it.get("student_id") or "").strip()
+                sname = str(it.get("student_name") or "").strip()
+                is_valid_sid = bool(sid) and sid.lower() not in ("none", "nan", "null", "") and len(sid) >= 8
+                is_valid_sname = bool(sname) and sname.lower() not in ("none", "nan", "null", "") and _is_real_name(sname)
+                key = sid if is_valid_sid else (sname if is_valid_sname else None)
+                if not key:
+                    key = Path(it["name"]).stem
+                if key not in student_groups:
+                    student_groups[key] = []
+                student_groups[key].append(it)
+            except Exception:
+                try:
+                    key = Path(it["name"]).stem
+                    if key not in student_groups:
+                        student_groups[key] = []
+                    student_groups[key].append(it)
+                except Exception:
+                    continue
 
-        deduped_items = []
+        deduped: List[Dict[str, Any]] = []
         for key, group in student_groups.items():
-            # 排序：综合报告排前面，其次按时间倒序
-            group.sort(key=lambda x: (
-                1 if x["name"].startswith("学生_") else 0,
-                x.get("mtime", "")
-            ), reverse=True)
-            # 取最权威的一个
-            best = dict(group[0])  # 使用副本，避免修改缓存
-            # 如果有多个报告，可以在 display_name 里提示一下（可选）
-            if len(group) > 1:
-                best["display_name"] = f"{best['display_name']} ({len(group)}份报告)"
-            deduped_items.append(best)
-        items = deduped_items
-    else:
-        items = [it for it in all_items if it.get("category") == type]
-    
+            try:
+                group.sort(key=lambda x: (
+                    1 if x["name"].startswith("学生_") else 0,
+                    x.get("mtime", "")
+                ), reverse=True)
+                best = dict(group[0])
+                if len(group) > 1:
+                    best["display_name"] = f"{best['display_name']} ({len(group)}份报告)"
+                deduped.append(best)
+            except Exception:
+                try:
+                    deduped.append(dict(group[0]))
+                except Exception:
+                    continue
+        return deduped
+
+    try:
+        if type == "all":
+            student_items = [it for it in all_items if it.get("category") == "student"]
+            other_items = [it for it in all_items if it.get("category") != "student"]
+            merged = _dedup_students(student_items) + other_items
+            try:
+                merged.sort(key=lambda x: x.get("mtime", ""), reverse=True)
+            except Exception:
+                pass
+            items = merged
+        elif type == "student":
+            student_items = [it for it in all_items if it.get("category") == "student"]
+            deduped = _dedup_students(student_items)
+            try:
+                deduped.sort(key=lambda x: x.get("mtime", ""), reverse=True)
+            except Exception:
+                pass
+            items = deduped
+        else:
+            items = [it for it in all_items if it.get("category") == type]
+    except Exception as e:
+        logger.warning("报告列表聚合失败(type=%s): %s", type, e)
+        items = []
+
     return {"total": len(items), "items": items}
 
 
@@ -294,45 +330,64 @@ async def api_download_report(filename: str):
 @router.get("/overview")
 async def api_report_overview():
     """返回报告详情页（批量总览）所需要的全部结构化数据"""
-    ad = state.latest_agg_data
-    if not ad:
-        return {"has_data": False}
+    try:
+        ad = state.latest_agg_data
+        if not ad:
+            return {"has_data": False}
 
-    success_count = sum(1 for r in state.latest_results if not r.get("has_error"))
-    fail_count = sum(1 for r in state.latest_results if r.get("has_error"))
+        success_count = 0
+        fail_count = 0
+        try:
+            success_count = sum(1 for r in state.latest_results if not r.get("has_error"))
+            fail_count = sum(1 for r in state.latest_results if r.get("has_error"))
+        except Exception:
+            pass
 
-    student_list = ad.get("student_list", [])
-    weak_students = [s for s in student_list if s.get("weak_count", 0) > 0]
+        student_list = ad.get("student_list", []) or []
+        weak_students = []
+        try:
+            weak_students = [s for s in student_list if s.get("weak_count", 0) > 0]
+        except Exception:
+            pass
 
-    return {
-        "has_data": True,
-        "results": state.latest_results,
-        "success_count": success_count,
-        "fail_count": fail_count,
-        "agg": {
-            "total_students": ad.get("total_students", 0),
-            "weak_student_count": ad.get("weak_student_count", 0),
-            "experiment_count": ad.get("experiment_count", 0),
-            "quiz_count": ad.get("quiz_count", 0),
-            "unit_count": ad.get("unit_count", 0),
-            "attendance_count": ad.get("attendance_count", 0),
-            "student_count": len(student_list),
-            "weak_student_count_live": len(weak_students),
-            "top_error": ad.get("top_error", []),
-        },
-        "student_list": [
-            {
-                "name": s.get("name", ""),
-                "student_id": s.get("student_id", ""),
-                "_key": s.get("_key", make_student_key(s.get("name", ""), s.get("student_id", ""))),
-                "weak_subtask_count": s.get("weak_subtask_count", 0),
-                "weak_knowledge_count": s.get("weak_knowledge_count", 0),
-                "weakness_rate": s.get("weakness_rate", 0),
-                "weak_count": s.get("weak_count", 0),
-            }
-            for s in student_list[:200]
-        ],
-    }
+        safe_student_list = []
+        try:
+            for s in student_list[:200]:
+                sname = str(s.get("name", "") or "")
+                sid = str(s.get("student_id", "") or "")
+                safe_student_list.append({
+                    "name": sname,
+                    "student_id": sid,
+                    "_key": s.get("_key") or make_student_key(sname, sid),
+                    "weak_subtask_count": s.get("weak_subtask_count", 0) or 0,
+                    "weak_knowledge_count": s.get("weak_knowledge_count", 0) or 0,
+                    "weakness_rate": s.get("weakness_rate", 0) or 0,
+                    "weak_count": s.get("weak_count", 0) or 0,
+                })
+        except Exception as e:
+            logger.warning("overview student_list 序列化失败: %s", e)
+
+        return {
+            "has_data": True,
+            "results": state.latest_results or [],
+            "success_count": success_count,
+            "fail_count": fail_count,
+            "agg": {
+                "total_students": ad.get("total_students", 0) or 0,
+                "weak_student_count": ad.get("weak_student_count", 0) or 0,
+                "experiment_count": ad.get("experiment_count", 0) or 0,
+                "quiz_count": ad.get("quiz_count", 0) or 0,
+                "unit_count": ad.get("unit_count", 0) or 0,
+                "attendance_count": ad.get("attendance_count", 0) or 0,
+                "student_count": len(student_list),
+                "weak_student_count_live": len(weak_students),
+                "top_error": ad.get("top_error", []) or [],
+            },
+            "student_list": safe_student_list,
+        }
+    except Exception as e:
+        logger.exception("报告总览接口失败")
+        return {"has_data": False, "error": str(e)}
 
 
 # ---------- 单文件重新分析报告（原 single-report/<report_stem>）----------

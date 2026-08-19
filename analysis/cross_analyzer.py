@@ -118,12 +118,13 @@ EXCLUDED_NAMES = set(load_config()["exclude_names"])
 
 def is_real_student(name: str) -> bool:
     """
-    判断是否为真实学生姓名（过滤测试账号和教师）。
+    判断是否为真实学生姓名（过滤测试账号、教师、实验标题等）。
     
     过滤规则：
     1. 姓名为空 → 排除
     2. 姓名在排除名单中 → 排除（教师名如"卢冶"）
     3. 姓名纯字母/数字/下划线（无汉字）→ 排除（测试账号如 pue9q3pyi）
+    4. 姓名过长（通常 > 6 个字符）且包含"实验/练习/项目/202"等关键字 → 排除（系统导出时的冗余行）
     """
     if not name or not name.strip():
         return False
@@ -133,6 +134,13 @@ def is_real_student(name: str) -> bool:
     # 如果姓名中不包含任何中文字符，视为非真实学生
     if not re.search(r'[\u4e00-\u9fff]', name):
         return False
+    
+    # 过滤疑似实验标题的长字符串
+    if len(name) > 6:
+        bad_keywords = ["实验", "练习", "项目", "测试", "作业", "202", "汇总", "分析"]
+        if any(k in name for k in bad_keywords):
+            return False
+            
     return True
 
 

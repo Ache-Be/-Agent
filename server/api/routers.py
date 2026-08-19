@@ -15,6 +15,7 @@ def register_api(app: FastAPI):
     from .v1.context import router as context_router
     from .v1.reports import router as reports_router
     from .v1.students import router as students_router
+    from .v1.analytics import router as analytics_router
 
     # 不带前缀的基础探活（前端 dashboard 直接 /healthz 调用）
     app.include_router(health_router, prefix="")
@@ -28,3 +29,4 @@ def register_api(app: FastAPI):
     app.include_router(context_router, prefix=prefix)
     app.include_router(reports_router, prefix=prefix)
     app.include_router(students_router, prefix=prefix)
+    app.include_router(analytics_router, prefix=prefix)

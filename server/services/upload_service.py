@@ -18,6 +18,7 @@ from core.utils import (
     make_student_key,
 )
 from services import analysis_service
+from services import ingest_service
 
 
 def _mod():
@@ -72,7 +73,7 @@ def _peek_csv_label(file_bytes_utf8: bytes) -> bool:
 
 
 def _safe_name_from_rel(rel_path: str, original_name: str) -> str:
-    """
+    r"""
     基于前端传来的 webkitRelativePath（含文件夹层级）生成磁盘上安全且唯一的文件名。
     避免：
       校区软件1-3班/项目0-Java语言概述.xlsx
@@ -169,6 +170,12 @@ def process_upload(
                 except Exception:
                     pass
                 analysis_service._save_analysis_snapshot()
+                # --- [NEW] 覆盖模式：pgvector 里上传的历史也清掉（数据库层的覆盖语义）---
+                try:
+                    from core.db import pg_store
+                    pg_store.wipe_all_uploads()
+                except Exception as e:
+                    logger.warning("覆盖模式清理 pgvector 历史失败（仍继续）：%s", e)
             except Exception as e:
                 logger.warning("覆盖模式清理历史失败（仍继续本次上传）：%s", e)
 
@@ -183,15 +190,24 @@ def process_upload(
                 rejected.append(err_msg)
                 continue
             # 内容级去重：**同一份字节内容不管来自哪个文件夹、叫啥名，都跳过**
-            # （随堂测验 xlsx 即使文件名相同，不同班级内容字节级几乎肯定不同，
-            #  所以这个规则只挡"真·完全相同文件反复拖进来"，不会误挡 1-3 班 vs 4-5 班）
             digest = hashlib.md5(raw_bytes).hexdigest()
             safe_name = _safe_name_from_rel(relative_path, original_name)
-            if digest in state.file_hashes:
+
+            # 检查是否有同名但内容不同的文件已存在，避免覆盖
+            # 如果当前 safe_name 已被占用，但 digest 不同，则为当前文件生成带 hash 后缀的唯一名
+            existing_fn = state.file_hashes.get(digest)
+            if existing_fn:
                 skipped_duplicates.append(
-                    f"{safe_name}（内容已分析，重复跳过；已存在：{state.file_hashes[digest]}）"
+                    f"{safe_name}（内容已分析，重复跳过；已存在：{existing_fn}）"
                 )
                 continue
+
+            # 处理同名冲突：如果 safe_name 已被其他 digest 占用
+            if safe_name in state.file_hashes.values():
+                stem = Path(safe_name).stem
+                suffix = Path(safe_name).suffix
+                safe_name = f"{stem}_{digest[:6]}{suffix}"
+
             store_path = config.upload_dir / safe_name
             store_bytes: bytes = normalized_bytes if normalized_bytes else raw_bytes
             store_path.write_bytes(store_bytes)
@@ -199,10 +215,62 @@ def process_upload(
             temp_path = config.temp_dir / safe_name
             temp_path.write_bytes(store_bytes)
 
+            # ============================================================
+            # [NEW] 新链路：行级向量化入库 pgvector（失败兜底不影响旧 parser）
+            # 性能标注：首个文件会触发 SentenceTransformer 本地模型加载（~2-15s），
+            # 后续批量文件复用同一个模型；embedding 阶段使用 batch_encode + CPU 批处理，
+            # 单 CSV 1000 行 ~ 1-3s。如果 pgvector 不可用（用户还没装），这里降级但不报错。
+            # ============================================================
+            try:
+                ingested = ingest_service.ingest_file(
+                    store_path,
+                    file_hash=digest,
+                    safe_name=safe_name,
+                    original_name=original_name,
+                    relative_path=relative_path,
+                    force=(mode == "overwrite"),
+                )
+                if ingested and ingested.get("status") == "ok":
+                    entry["ingest_ok"] = True
+                    entry["ingest_rows_student"] = ingested.get("rows_student", 0)
+                    entry["ingest_rows_noise"] = ingested.get("rows_noise", 0)
+                    entry["ingest_rows_teacher"] = ingested.get("rows_teacher", 0)
+                    entry["ingest_rows_total"] = ingested.get("rows_total", 0)
+                    entry["ingest_source_type"] = ingested.get("source_type", "")
+                    entry["ingest_class_name"] = ingested.get("class_name", "")
+                    entry["ingest_experiment_name"] = ingested.get("experiment_name", "")
+                    # 如果旧 parser 还没填实验/班级/数据源，优先用新链路的（更一致）
+                    if not entry.get("experiment_name") or entry["experiment_name"] == original_name:
+                        if ingested.get("class_name") and ingested.get("experiment_name"):
+                            entry["experiment_name"] = (
+                                f"{ingested['class_name']} · {ingested['experiment_name']}"
+                            )
+                        elif ingested.get("experiment_name"):
+                            entry["experiment_name"] = ingested["experiment_name"]
+                    if not entry.get("source_type") and ingested.get("source_type"):
+                        entry["source_type"] = ingested["source_type"]
+                    if ingested.get("rows_student") and not entry.get("student_count"):
+                        entry["student_count"] = ingested["rows_student"]
+                elif ingested and ingested.get("status") == "skipped":
+                    entry["ingest_ok"] = True
+                    entry["ingest_skipped"] = True
+                    entry["ingest_skip_reason"] = ingested.get("reason", "")
+                elif ingested and ingested.get("status") == "error":
+                    entry["ingest_ok"] = False
+                    entry["ingest_error"] = ingested.get("error", "")[:200]
+            except Exception as e:
+                logger.warning(
+                    "新链路 ingest_service.ingest_file 失败（降级，不影响旧链路）"
+                    " [%s / %s]: %s", safe_name, original_name, e, exc_info=True
+                )
+                entry["ingest_ok"] = False
+                entry["ingest_error"] = str(e)[:200]
+
             entry: Dict[str, Any] = {
                 "original_name": original_name,
                 "safe_name": safe_name,
                 "relative_path": relative_path,
+                "file_hash": digest,
                 "source_type": "",
                 "experiment_name": original_name,
                 "report_filename": "",
@@ -220,6 +288,7 @@ def process_upload(
                         res["uploaded_name"] = original_name
                         res["safe_name"] = safe_name
                         res["relative_path"] = relative_path
+                        res["file_hash"] = digest
                         unit_results.append(res)
                         entry["source_type"] = "单元练习"
                         _dir_hint = relative_path.split("/")[-2] if "/" in relative_path.replace("\\","/") else ""
@@ -231,6 +300,7 @@ def process_upload(
                         res["uploaded_name"] = original_name
                         res["safe_name"] = safe_name
                         res["relative_path"] = relative_path
+                        res["file_hash"] = digest
                         attendance_results.append(res)
                         entry["source_type"] = "课堂活动"
                         _dir_hint = relative_path.split("/")[-2] if "/" in relative_path.replace("\\","/") else ""
@@ -246,6 +316,7 @@ def process_upload(
                             quiz["uploaded_name"] = original_name
                             quiz["safe_name"] = safe_name
                             quiz["relative_path"] = relative_path
+                            quiz["file_hash"] = digest
                             quiz_results.append(quiz)
                             entry["source_type"] = "随堂测验"
                             _dir_hint = relative_path.split("/")[-2] if "/" in relative_path.replace("\\","/") else ""
@@ -266,6 +337,7 @@ def process_upload(
                                     res["uploaded_name"] = original_name
                                     res["safe_name"] = safe_name
                                     res["relative_path"] = relative_path
+                                    res["file_hash"] = digest
                                     if key == "单元练习": unit_results.append(res)
                                     elif key == "课堂活动": attendance_results.append(res)
                                     else: knowledge_results.append(res)
@@ -370,6 +442,7 @@ def process_upload(
                     # 两个不同班同名实验（如"Java入门-项目0-猜数字"）会被 only-p 当成重复误吞
                     exp["uploaded_name"] = r["original_name"]
                     exp["safe_name"] = r["safe_name"]
+                    exp["file_hash"] = r.get("file_hash", "")
                     exp["relative_path"] = r.get("relative_path", "")
                     rel = r.get("relative_path", "").replace("\\", "/")
                     # class_name：取 relative_path 倒数第二级文件夹（苏理工-Java程序设计（2026）这种）
@@ -393,22 +466,24 @@ def process_upload(
             def _merge_combo(dst: List[Dict[str, Any]], src: List[Dict[str, Any]], primary_key: str, secondary_key: str = "safe_name"):
                 """
                 组合键判重：
-                  - safe: safe_name（带文件夹层级编码，最权威，有就直接判
-                  - cls+p: class_name + primary_key（班级+主键
+                  - hash: file_hash（最准确，内容一致即视为重复）
+                  - safe: safe_name（带文件夹层级编码，有就判）
+                  - cls+p: class_name + primary_key（班级+主键）
                   - cls+exp: class_name + experiment_name
-                  - only-p: 如果 old/new 都没 safe_name 才退化用 primary_key（兼容纯文件名老数据）
-                避免 1-3班/项目0.xlsx 和 4-5班/项目0.xlsx 上传文件名相同被误判丢弃。
+                  - only-p: 退化用 primary_key
                 """
                 def _fp(item: Dict[str, Any]) -> Set[str]:
                     fps: Set[str] = set()
                     p = item.get(primary_key)
                     s = item.get(secondary_key, "")
+                    h = item.get("file_hash", "")
                     cls = item.get("class_name", "")
                     expn = item.get("experiment_name", "")
+                    if h: fps.add(f"hash::{h}")
                     if s: fps.add(f"safe::{s}")
                     if cls and p: fps.add(f"cls+p::{cls}||{p}")
                     if cls and expn: fps.add(f"cls+exp::{cls}||{expn}")
-                    if (not s) and p: fps.add(f"only-p::{p}")
+                    if (not s) and (not h) and p: fps.add(f"only-p::{p}")
                     return fps
 
                 dst_fps = [_fp(x) for x in dst]

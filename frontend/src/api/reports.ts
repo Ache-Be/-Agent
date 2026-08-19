@@ -25,11 +25,10 @@ export const listReports = (type: string = 'all'): Promise<{ total: number; item
 }
 
 export const viewReportContent = (filename: string): Promise<{ name: string; content: string; size: number; mtime: string }> => {
-  return request.get(`/api/reports/content/${filename}`) as any
+  return request.get(`/api/reports/content/${encodeURIComponent(filename)}`) as any
 }
 
 export const downloadReport = (filename: string) => {
-  // 直接用浏览器打开（会触发下载）
   window.location.href = `/api/reports/download/${encodeURIComponent(filename)}`
 }
 
@@ -38,13 +37,13 @@ export const getReportOverview = (): Promise<ReportOverview> => {
 }
 
 export const getSingleFileReport = (stem: string): Promise<any> => {
-  return request.get(`/api/reports/single/${stem}`) as any
+  return request.get(`/api/reports/single/${encodeURIComponent(stem)}`) as any
 }
 
 export const getStudentReport = (studentKey: string, reportStem?: string): Promise<any> => {
   const url = reportStem
-    ? `/api/reports/student/${reportStem}/${studentKey}`
-    : `/api/reports/student/${studentKey}`
+    ? `/api/reports/student/${encodeURIComponent(reportStem)}/${encodeURIComponent(studentKey)}`
+    : `/api/reports/student/${encodeURIComponent(studentKey)}`
   return request.get(url) as any
 }
 

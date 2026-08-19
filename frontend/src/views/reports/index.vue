@@ -194,10 +194,9 @@ const reports = ref<ReportItem[]>([])
 const total = ref(0)
 const overview = ref<ReportOverview>({ has_data: false })
 
-// 前端本地过滤：tab切换+关键字搜索都在内存里算，切 tab 不再发请求扫盘
+// 前端本地仅做关键字搜索；category 过滤已由后端按 type 参数负责（含学生聚合）
 const filteredReports = computed(() => {
   let list = reports.value
-  if (currentTab.value !== 'all') list = list.filter(r => r.category === currentTab.value)
   if (keyword.value) {
     const k = keyword.value.trim().toLowerCase()
     if (k) {
@@ -226,7 +225,7 @@ const loadList = async () => {
   loading.value = true
   try {
     // 永远只拉 type=all（后端30s单entry缓存），前端本地按 type 过滤
-    const data = await api.listReports('all')
+    const data = await api.listReports(currentTab.value)
     total.value = data.total
     reports.value = (data.items || []).map((it: any) => ({
       ...it,
@@ -236,6 +235,12 @@ const loadList = async () => {
     loading.value = false
   }
 }
+
+// 监听 tab 切换，触发加载（以触发后端的 student 类型聚合逻辑）
+import { watch } from 'vue'
+watch(currentTab, () => {
+  loadList()
+})
 
 const loadOverview = async () => {
   try {

@@ -10,6 +10,17 @@ aiofiles==24.1.0
 PyYAML==6.0.2
 python-dotenv==1.1.1
 
+# ============ PostgreSQL + pgvector ============
+psycopg2-binary>=2.9.10
+SQLAlchemy>=2.0.36
+pgvector>=0.3.5
+
+# ============ Embedding / 向量计算 ============
+# numpy>=2.0 兼容 Python 3.13；pandas>=2.2 也能装
+sentence-transformers>=3.3.1
+numpy>=2.1.0,<3.0
+pandas>=2.2.0,<3.0
+
 # ============ 业务分析（保留原依赖，移除 Flask/waitress）============
 openpyxl==3.1.5
 python-docx==1.2.0

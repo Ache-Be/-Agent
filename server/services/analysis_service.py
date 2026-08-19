@@ -253,12 +253,14 @@ def restore_uploads_on_startup():
     temp_dir = config.temp_dir
     for f in data_files:
         original_name = f.name
+        f_hash = file_md5(f)
         temp_path = temp_dir / original_name
         try:
             shutil.copy2(str(f), str(temp_path))
         except Exception:
             continue
         entry = {"original_name": original_name, "source_type": "",
+                 "safe_name": original_name, "file_hash": f_hash,
                  "experiment_name": original_name, "report_filename": "",
                  "student_count": 0, "weak_count": 0, "has_error": False}
         try:
@@ -267,6 +269,8 @@ def restore_uploads_on_startup():
                 if "单元练习" in fn:
                     res = mod["analyze_unit_file"](str(temp_path))
                     res["uploaded_name"] = original_name
+                    res["safe_name"] = original_name
+                    res["file_hash"] = f_hash
                     unit_results.append(res)
                     entry["source_type"] = "单元练习"
                     entry["experiment_name"] = res.get("class_name", original_name)
@@ -274,6 +278,8 @@ def restore_uploads_on_startup():
                 elif "课堂活动" in fn or "分数明细" in fn:
                     res = mod["analyze_attendance_file"](str(temp_path))
                     res["uploaded_name"] = original_name
+                    res["safe_name"] = original_name
+                    res["file_hash"] = f_hash
                     attendance_results.append(res)
                     entry["source_type"] = "课堂活动"
                     entry["experiment_name"] = res.get("class_name", original_name)
@@ -285,6 +291,8 @@ def restore_uploads_on_startup():
                         quiz = None
                     if quiz:
                         quiz["uploaded_name"] = original_name
+                        quiz["safe_name"] = original_name
+                        quiz["file_hash"] = f_hash
                         quiz_results.append(quiz)
                         entry["source_type"] = "随堂测验"
                         entry["experiment_name"] = f"{quiz.get('project_id', '')}-{quiz.get('chapter_name', original_name)}"
@@ -299,12 +307,11 @@ def restore_uploads_on_startup():
                             try:
                                 res = mod[analyzer_fn](str(temp_path))
                                 res["uploaded_name"] = original_name
-                                if key[0] == "单元练习":
-                                    unit_results.append(res)
-                                elif key[0] == "课堂活动":
-                                    attendance_results.append(res)
-                                else:
-                                    knowledge_results.append(res)
+                                res["safe_name"] = original_name
+                                res["file_hash"] = f_hash
+                                if analyzer_fn == "analyze_unit_file": unit_results.append(res)
+                                elif analyzer_fn == "analyze_attendance_file": attendance_results.append(res)
+                                else: knowledge_results.append(res)
                                 entry["source_type"] = key[0]
                                 entry["experiment_name"] = res.get("class_name", original_name)
                                 entry["student_count"] = res.get("student_count", 0)

@@ -34,3 +34,50 @@ cors:
     - "http://localhost:5173"
     - "http://localhost:9090"
     - "*"
+# ============ PostgreSQL + pgvector ============
+database:
+  host: "127.0.0.1"
+  port: 5432
+  user: "postgres"
+  password: "JGYjw820125"
+  database: "teaching_warning"
+  # 连接池参数
+  pool_size: 10
+  max_overflow: 20
+  pool_timeout: 30
+  echo: false
+# ============ Embedding 模型配置 ============
+embedding:
+  provider: "sentence_transformers"
+  model_name: "D:/A教育agent/data/models/bge-small-zh-v1.5"
+  vector_dim: 512
+  max_seq_length: 512
+  batch_size: 64
+  cache_dir: "../data/models"
+# ============ 数据清洗规则 ============
+cleaning:
+  # 配置型的老师名黑名单，行中姓名命中则标记为 teacher 不入库
+  teacher_names:
+    - "卢冶"
+  # 班级标题行/噪声行关键词
+  noise_keywords:
+    - "学号"
+    - "姓名"
+    - "班级"
+    - "实验"
+    - "班级名称"
+    - "class"
+    - "student"
+    - "name"
+    - "总分"
+    - "平均分"
+    - "正确率"
+    - "序号"
+    - "排名"
+    - "实验报告"
+  # 学号格式正则（头歌/MOOC/随堂常见），命中视为学生行的强特征
+  student_id_regex:
+    - "^20\\d{6,10}$"
+    - "^\\d{8,12}$"
+  # 姓名长度范围
+  name_len_range: [2, 4]
