@@ -9,6 +9,9 @@ export interface ReportItem {
   display_name: string
   student_name: string
   student_id: string
+  /** 同一学生合并的多份报告文件名（>1 时列表显示 N份报告，预览全部叠加） */
+  files?: string[]
+  group_count?: number
 }
 
 export interface ReportOverview {
@@ -26,6 +29,11 @@ export const listReports = (type: string = 'all'): Promise<{ total: number; item
 
 export const viewReportContent = (filename: string): Promise<{ name: string; content: string; size: number; mtime: string }> => {
   return request.get(`/api/reports/content/${encodeURIComponent(filename)}`) as any
+}
+
+/** 批量预览：同一学生多份报告合并展示 */
+export const viewReportContentBatch = (names: string[]): Promise<{ ok: boolean; items: { name: string; content: string }[]; total: number }> => {
+  return request.post('/api/reports/content/batch', { names }) as any
 }
 
 export const downloadReport = (filename: string) => {

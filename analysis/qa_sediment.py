@@ -29,6 +29,24 @@ QA_DIR = ROOT / "data" / "qa_sediment"
 QA_LOG_FILE = QA_DIR / "qa_logs.jsonl"
 
 _MAX_ANSWER_LEN = 600  # 注入 prompt 时回答的截断长度
+_MAX_QA_RECORDS = 3000  # 沉淀库上限：超过后裁掉最旧的记录，防止无限膨胀、拖慢检索
+
+
+def _prune_qa_file():
+    """沉淀库超过上限时保留最新 _MAX_QA_RECORDS 条。
+    注意：需全量重写文件（O(n)，n=3000 量级，仅超限后每次保存触发一次），
+    文件本身是追加写，按行序保留最新部分即可保持时间顺序。
+    """
+    try:
+        with open(QA_LOG_FILE, "r", encoding="utf-8") as f:
+            lines = [ln for ln in f if ln.strip()]
+        if len(lines) <= _MAX_QA_RECORDS:
+            return
+        with open(QA_LOG_FILE, "w", encoding="utf-8") as f:
+            f.writelines(lines[-_MAX_QA_RECORDS:])
+        logger.info("问答沉淀裁剪：%d -> %d 条", len(lines), _MAX_QA_RECORDS)
+    except Exception as e:
+        logger.warning("问答沉淀裁剪失败: %s", e)
 
 
 def _norm_text(s: str) -> str:
@@ -69,6 +87,7 @@ def save_qa(
         }
         with open(QA_LOG_FILE, "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        _prune_qa_file()
         return rec
     except Exception as e:
         logger.warning("保存问答沉淀失败: %s", e)
@@ -110,6 +129,51 @@ def count_qa() -> int:
     except Exception:
         pass
     return n
+
+
+def clear_qa() -> int:
+    """清空问答沉淀 jsonl 文件，返回删除条数。失败返回 0（不抛出）。"""
+    if not QA_LOG_FILE.exists():
+        return 0
+    n = count_qa()
+    try:
+        QA_LOG_FILE.write_text("", encoding="utf-8")
+        logger.info("问答沉淀 jsonl 已清空：%d 条", n)
+        return n
+    except Exception as e:
+        logger.warning("问答沉淀 jsonl 清空失败: %s", e)
+        return 0
+
+
+def delete_qa_by_ids(ids) -> int:
+    """按 id 逐条删除 jsonl 沉淀，返回删除条数。失败返回 0（不抛出）。"""
+    if not ids:
+        return 0
+    if not QA_LOG_FILE.exists():
+        return 0
+    id_set = {str(i) for i in ids}
+    try:
+        with open(QA_LOG_FILE, "r", encoding="utf-8") as f:
+            lines = [ln for ln in f if ln.strip()]
+        keep, deleted = [], 0
+        for ln in lines:
+            try:
+                rec = json.loads(ln)
+            except json.JSONDecodeError:
+                keep.append(ln)  # 坏行不删，保留原样
+                continue
+            if str(rec.get("id") or "") in id_set:
+                deleted += 1
+            else:
+                keep.append(ln)
+        if deleted:
+            with open(QA_LOG_FILE, "w", encoding="utf-8") as f:
+                f.writelines(keep)
+            logger.info("问答沉淀 jsonl 逐条删除：%d 条", deleted)
+        return deleted
+    except Exception as e:
+        logger.warning("问答沉淀 jsonl 逐条删除失败: %s", e)
+        return 0
 
 
 def retrieve_qa(query: str, top_k: int = 2) -> List[Dict]:

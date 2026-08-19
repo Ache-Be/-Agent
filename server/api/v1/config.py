@@ -12,7 +12,14 @@ from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
 from core.logging_setup import logger
-from core.utils import load_api_key, save_api_key, save_analysis_thresholds, load_analysis_thresholds
+from core.utils import (
+    load_api_key,
+    save_api_key,
+    save_analysis_thresholds,
+    load_analysis_thresholds,
+    load_chat_flags,
+    save_chat_flags,
+)
 
 router = APIRouter(tags=["系统配置"])
 
@@ -22,6 +29,7 @@ class FullConfigRequest(BaseModel):
     weak_threshold: Optional[float] = Field(default=None, ge=0.3, le=0.95, description="薄弱得分率阈值(小数)")
     low_score_line: Optional[float] = Field(default=None, ge=20, le=90, description="低分线(百分制整数)")
     view_answer_alert_rate: Optional[float] = Field(default=None, ge=0.01, le=0.8, description="查答案率关注线(小数)")
+    enable_qa_sediment_ref: Optional[bool] = Field(default=None, description="AI 回答时是否参考历史问答沉淀")
 
 
 class FullConfigResponse(BaseModel):
@@ -29,17 +37,20 @@ class FullConfigResponse(BaseModel):
     weak_threshold: float
     low_score_line: float
     view_answer_alert_rate: float
+    enable_qa_sediment_ref: bool
 
 
 @router.get("/config", response_model=FullConfigResponse)
 async def api_get_config():
     key = load_api_key()
     th = load_analysis_thresholds()
+    flags = load_chat_flags()
     return FullConfigResponse(
         api_configured=bool(key),
         weak_threshold=float(th["weak_threshold"]),
         low_score_line=float(th["low_score_line"]),
         view_answer_alert_rate=float(th["view_answer_alert_rate"]),
+        enable_qa_sediment_ref=bool(flags.get("enable_qa_sediment_ref", True)),
     )
 
 
@@ -71,6 +82,14 @@ async def api_set_config(body: FullConfigRequest):
     if thresholds_changed:
         save_analysis_thresholds(new_th)
         msgs.append("分析阈值已保存")
+
+    # 2.5 沉淀参考开关（无需重建分析）
+    if body.enable_qa_sediment_ref is not None:
+        save_chat_flags({"enable_qa_sediment_ref": body.enable_qa_sediment_ref})
+        msgs.append(
+            "历史问答沉淀参考已"
+            + ("开启" if body.enable_qa_sediment_ref else "关闭（AI 回答将不再参考历史问答，可节省 token）")
+        )
 
     # 3. 阈值变了 → 热更新 analysis.config 缓存 + 重建学生聚合 + 重生成报告
     if thresholds_changed:

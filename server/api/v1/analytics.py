@@ -110,6 +110,18 @@ def hybrid_search(
         if not q or not isinstance(q, str) or not q.strip():
             raise HTTPException(status_code=422, detail="query 必填，且不能是空字符串")
         top_k = int(body.get("top_k", 20))
+        # 显式过滤参数优先；没传过滤条件时自动抽取意图，与 chat RAG 链路行为一致
+        has_explicit = any(body.get(k) is not None for k in (
+            "student_id", "name", "class_name", "experiment_name",
+            "source_type", "min_score", "max_score", "vector_only",
+        ))
+        if not has_explicit:
+            from services.rag_service import _extract_intent
+            intent = _extract_intent(q)
+            body = {**body, **{k: intent.get(k) for k in (
+                "student_id", "name", "class_name", "experiment_name",
+                "min_score", "max_score", "vector_only",
+            )}}
         q_vec = embedding.encode_one(q)
         rows = _pg().hybrid_search(
             q_vec,

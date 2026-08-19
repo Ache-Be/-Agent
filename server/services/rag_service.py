@@ -40,19 +40,24 @@ _CLASS_RE = re.compile(
     r"(\d{1,4})(?:[\-_~\u2013\u2014至到]\d{0,4})?\s*(?:班|级|部|年级)?"
     r"|[\u4e00-\u9fffA-Za-z]{1,8}[\-_]?\d{1,4}(?:[\-_~\u2013\u2014至到]\d{0,4})?\s*(班|级)"
 )
+# 实验/项目/章节名：优先抓触发词(实验/项目/第X章)前面的中文名词短语（如"银行账户管理实验"），
+# 前缀限纯中文，避免从班级名中间（"软件1-3班 这次银行账户管理"）错位抓取；
+# 抓不到名词短语时只匹配到裸触发词，由 _extract_intent 里的清理逻辑丢弃
 _EXPERIMENT_RE = re.compile(
+    r"([\u4e00-\u9fff]{0,12}?)"
     r"(实验|项目|章节|第[一二三四五六七八九十0-9]+[章节个])"
-    r"[\u4e00-\u9fffA-Za-z0-9_\- ]{0,20}?(?=[，。,\s的是有与和跟对？?！!]|$)"
-    r"|(Java[_\- \u4e00-\u9fffA-Za-z0-9]{0,30})"
+    r"|(Java[_\-\u4e00-\u9fffA-Za-z0-9]{0,30})"
 )
-_SCORE_UNDER_RE = re.compile(r"低于\s*(\d+)|不到\s*(\d+)|不及格|挂科|薄弱|小于\s*(\d+)")
+_SCORE_UNDER_RE = re.compile(r"低于\s*(\d+)|不到\s*(\d+)|(\d+)\s*分以下|不及格|挂科|薄弱|小于\s*(\d+)")
 _SCORE_OVER_RE = re.compile(r"高于\s*(\d+)|超过\s*(\d+)|大于\s*(\d+)|及格以上|(\d+)分以上")
-_SID_RE = re.compile(r"\b2[0-9]\d{10}\b|\b20\d{6,10}\b|\b\d{8,14}\b")
+# 学号：用 (?<!\d)/(?!\d) 数字边界替代 \b —— Python str 正则里汉字是 \w，
+# "学号252219605209" 中"号"与数字之间没有 \b 边界，\b 写法会把学号漏掉
+_SID_RE = re.compile(r"(?<!\d)(?:2[0-9]\d{10}|20\d{6,10}|\d{8,14})(?!\d)")
 _NAME_RE = re.compile(
     r"同学([\u4e00-\u9fff]{2,4})"
     r"|学生\s*([\u4e00-\u9fff]{2,4})"
     r"|姓名[:：]?\s*([\u4e00-\u9fff]{2,4})"
-    r"|(?:^|[\s，。,])((?:(?!同学|学生|姓名|班级|学号|实验|项目|平均|多少|哪些|怎么|什么|这个|那个|请问|帮我|分析|查看|查询|列出|统计)[\u4e00-\u9fff]){2,4})(?=$|[\s，。,同学学生班级学号实验项目的是了在和跟对])"
+    r"|(?:^|[\s，。,])((?:(?!同学|学生|姓名|班级|学号|实验|项目|平均|多少|哪些|怎么|什么|这个|那个|请问|帮我|分析|查看|查询|列出|统计|薄弱|不及格|挂科|及格|的|了)[\u4e00-\u9fff]){2,4})(?=$|[\s，。,同学学生班级学号实验项目的是了在和跟对])"
 )
 _AGG_INTENT_RE = re.compile(
     r"(平均分|平均|最高分|最低分|排名|薄弱率|及格率|统计|整体情况|总体|多少人|"
@@ -94,7 +99,22 @@ def _extract_intent(user_msg: str) -> Dict[str, Any]:
     # 实验名
     em = _EXPERIMENT_RE.search(user_msg)
     if em:
-        out["experiment_name"] = em.group(0)
+        exp_name = em.group(0).strip()
+        # 去掉 "这次/该/这个" 等前缀语气词
+        for tok in ("这次", "本次", "这个", "那个", "此次", "我的", "这"):
+            if exp_name.startswith(tok):
+                exp_name = exp_name[len(tok):].strip()
+                break
+        # 裸触发词（实验/项目/章节/第X章）提供不了过滤信息，丢弃避免误过滤全表
+        if not exp_name or re.fullmatch(
+            r"(?:实验|项目|章节|第[一二三四五六七八九十0-9]+[章节个])", exp_name
+        ):
+            exp_name = ""
+        else:
+            # 库中实验名多为「…项目2-银行账户管理」形式，去掉尾部 实验/项目 后 LIKE 更好命中
+            exp_name = re.sub(r"(实验|项目)$", "", exp_name).strip()
+        if exp_name:
+            out["experiment_name"] = exp_name
     # 分数范围: 低于60/不及格 → max=60
     mu = _SCORE_UNDER_RE.search(user_msg)
     if mu:
@@ -216,12 +236,13 @@ def _format_qa_history_context(query_vec: List[float], top_k: int = 3) -> str:
 
 
 def build_retrieval_context(user_msg: str,
-                            top_k_rows: int = 40) -> Tuple[str, List[float], Dict]:
+                            top_k_rows: int = 40,
+                            include_qa_history: bool = True) -> Tuple[str, List[float], Dict]:
     """
     在线检索主函数：
       1) 意图抽取
       2) query embedding
-      3) SQL 聚合上下文 + 混合检索行上下文 + 历史 QA 上下文
+      3) SQL 聚合上下文 + 混合检索行上下文 + 历史 QA 上下文（可选）
     返回 (prompt_context_text, query_vector, intent)
     """
     intent = _extract_intent(user_msg)
@@ -250,8 +271,8 @@ def build_retrieval_context(user_msg: str,
     # 3) 行级 RAG 上下文
     rows_ctx = _format_rag_rows_context(rag_rows)
 
-    # 4) 历史问答沉淀
-    qa_ctx = _format_qa_history_context(q_vec, top_k=3)
+    # 4) 历史问答沉淀（可关闭：省 token）
+    qa_ctx = _format_qa_history_context(q_vec, top_k=3) if include_qa_history else ""
 
     parts = [agg_ctx, rows_ctx, qa_ctx]
     ctx_text = "\n\n".join([p for p in parts if p])
@@ -274,9 +295,10 @@ _SYSTEM_BASE = (
 )
 
 
-def build_system_prompt(user_msg: str) -> Tuple[str, List[float], Dict]:
-    """返回 (system_prompt, query_embedding_vec, intent_dict)"""
-    ctx, vec, intent = build_retrieval_context(user_msg)
+def build_system_prompt(user_msg: str, include_qa_history: bool = True) -> Tuple[str, List[float], Dict]:
+    """返回 (system_prompt, query_embedding_vec, intent_dict)
+    include_qa_history=False 时不检索/不注入历史问答沉淀（省 token 的场景开关）。"""
+    ctx, vec, intent = build_retrieval_context(user_msg, include_qa_history=include_qa_history)
     if not ctx:
         ctx = (
             "【当前暂无可检索的教学数据】——请先通过上传页面上传头歌/MOOC/随堂/考勤 CSV/XLSX 文件，"

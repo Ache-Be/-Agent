@@ -60,6 +60,11 @@
                 <el-avatar :size="32" :icon="m.role === 'user' ? UserFilled : Cpu" />
                 <div class="msg-bubble">
                   <div class="markdown-body" v-html="renderMarkdown(m.content)"></div>
+                  <div v-if="m.doc" class="doc-download">
+                    <el-button type="primary" size="small" :icon="Download" @click="downloadDoc(m.doc.url_path, m.doc.filename)">
+                      下载 Word 报告
+                    </el-button>
+                  </div>
                 </div>
               </div>
               <div v-if="streaming || assistantDraft" class="msg assistant">
@@ -114,7 +119,7 @@ import {
   deleteConversation,
   type Conversation,
 } from '@/api/chat'
-import { UserFilled, Cpu } from '@element-plus/icons-vue'
+import { UserFilled, Cpu, Download } from '@element-plus/icons-vue'
 import { marked } from 'marked'
 
 const convLoading = ref(false)
@@ -125,9 +130,18 @@ const messages = ref<any[]>([])
 const input = ref('')
 const streaming = ref(false)
 const assistantDraft = ref('')
+const pendingDoc = ref<any>(null)  // 报告类回复：后端发 doc 事件后暂存，done 时挂到消息上
 const chatBodyRef = ref<HTMLElement | null>(null)
 let sseClient: EventSource | null = null
 let streamAbortController: AbortController | null = null
+
+const downloadDoc = (urlPath?: string, filename?: string) => {
+  if (!urlPath) {
+    ElMessage.warning('报告文件不存在，可能已被清理')
+    return
+  }
+  window.open(urlPath, '_blank')
+}
 
 const currentConv = computed(() => conversations.value.find(c => c.id === currentConvId.value))
 
@@ -169,6 +183,7 @@ const createConv = async () => {
     currentConvId.value = (conv as any).id
     messages.value = []
     assistantDraft.value = ''
+    pendingDoc.value = null
     ElMessage.success('已创建新对话')
   } catch {}
 }
@@ -185,6 +200,7 @@ const selectConv = async (id: string) => {
     messages.value = (data as any)?.messages || []
   } catch {}
   assistantDraft.value = ''
+  pendingDoc.value = null
   scrollBottom()
 }
 
@@ -249,7 +265,8 @@ const closeSSE = () => {
 const abortStream = () => {
   closeSSE()
   if (streaming.value && assistantDraft.value) {
-    messages.value.push({ role: 'assistant', content: assistantDraft.value })
+    messages.value.push({ role: 'assistant', content: assistantDraft.value, doc: pendingDoc.value || undefined })
+    pendingDoc.value = null
     assistantDraft.value = ''
   }
   streaming.value = false
@@ -350,9 +367,15 @@ const handleEvent = (event: string, payload: any) => {
     scrollBottom()
     return
   }
+  if (realEvent === 'doc') {
+    // 报告类回复：记录 Word 下载信息，done 时挂到本条回复上
+    pendingDoc.value = { url_path: payload?.url_path, filename: payload?.filename }
+    return
+  }
   if (realEvent === 'done') {
     const content = assistantDraft.value || payload?.reply || ''
-    messages.value.push({ role: 'assistant', content })
+    messages.value.push({ role: 'assistant', content, doc: pendingDoc.value || undefined })
+    pendingDoc.value = null
     assistantDraft.value = ''
     streaming.value = false
     if (payload?.title) {
@@ -440,6 +463,7 @@ onMounted(async () => {
     pre { background: #272822; color:#f8f8f2; padding: 10px 12px; border-radius: 6px; overflow-x: auto; }
     table { border-collapse: collapse; th, td { border: 1px solid #ddd; padding: 4px 8px; } }
   }
+  .doc-download { margin-top: 10px; padding-top: 10px; border-top: 1px dashed #ebeef5; }
 }
 @keyframes blink { 50% { opacity: 0; } }
 

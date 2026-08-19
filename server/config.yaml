@@ -16,9 +16,13 @@ upload:
   upload_dir: "uploads"
   report_dir: "uploads/reports"
   temp_dir: "uploads/_temp"
+  ai_report_dir: "uploads/ai_reports"
 conv:
   max_conversations: 50
   history_keep_last: 20
+chat:
+  enable_tools: true
+  max_tool_rounds: 3
 report:
   max_txt_archive: 3000
 knowledge:

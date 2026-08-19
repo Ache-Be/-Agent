@@ -21,6 +21,7 @@ MOOC（课堂成绩）数据解析器。
 import csv
 import codecs
 import logging
+import re
 from pathlib import Path
 from collections import defaultdict
 from typing import List, Dict, Optional, Union

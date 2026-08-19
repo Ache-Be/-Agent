@@ -76,6 +76,15 @@ class _Config:
         return p
 
     @property
+    def ai_report_dir(self) -> Path:
+        """AI 助手的报告 Word 输出目录。
+        注意与 report_dir（上传数据解析产物目录）严格分开：AI 报告可安全对外下载，
+        而 report_dir 里是教师上传的教学数据，绝不能通过下载接口暴露。"""
+        p = BASE_DIR / str(self.get("upload.ai_report_dir", "uploads/ai_reports"))
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
+    @property
     def temp_dir(self) -> Path:
         p = BASE_DIR / str(self.get("upload.temp_dir", "uploads/_temp"))
         p.mkdir(parents=True, exist_ok=True)

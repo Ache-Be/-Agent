@@ -197,6 +197,36 @@ def save_analysis_thresholds(new_values: Dict[str, Any]):
     _CONFIG_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+# ----------- AI 对话功能开关 -----------
+_DEFAULT_CHAT_FLAGS = {"enable_qa_sediment_ref": True}
+
+
+def load_chat_flags() -> Dict[str, Any]:
+    """加载 AI 对话功能开关（当前仅 enable_qa_sediment_ref：回答时是否检索/注入历史问答沉淀）。"""
+    cfg: Dict[str, Any] = dict(_DEFAULT_CHAT_FLAGS)
+    if _CONFIG_FILE.exists():
+        try:
+            data = json.loads(_CONFIG_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            return cfg
+        if isinstance(data.get("enable_qa_sediment_ref"), bool):
+            cfg["enable_qa_sediment_ref"] = data["enable_qa_sediment_ref"]
+    return cfg
+
+
+def save_chat_flags(new_values: Dict[str, Any]):
+    """保存 AI 对话功能开关到 server/config/settings.json（与 API Key 同文件，统一管理）。"""
+    data: Dict[str, Any] = {}
+    if _CONFIG_FILE.exists():
+        try:
+            data = json.loads(_CONFIG_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+    if isinstance(new_values.get("enable_qa_sediment_ref"), bool):
+        data["enable_qa_sediment_ref"] = bool(new_values["enable_qa_sediment_ref"])
+    _CONFIG_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 # ----------- 对话管理 -----------
 CONV_DIR = _CONFIG_DIR / "conversations"
 CONV_DIR.mkdir(parents=True, exist_ok=True)

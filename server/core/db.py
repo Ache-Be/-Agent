@@ -8,6 +8,7 @@ PostgreSQL + pgvector 连接层
 from __future__ import annotations
 
 import json
+import re
 import threading
 from contextlib import contextmanager
 from datetime import datetime
@@ -204,6 +205,34 @@ def run_migration_if_needed(migration_path: Optional[Path] = None) -> Tuple[bool
 
 
 # ========================= PgvectorStore: 向量 & 结构化查询对外接口 =========================
+def _vector_literal(v: List[float]) -> str:
+    """
+    pgvector 的 text() 绑定辅助：把向量序列化成 '[0.1,0.2,...]' 文本再 CAST。
+    不依赖 psycopg2 对 Python list 的数组适配（不同版本行为不一致），
+    也避免 SQLAlchemy text() 解析 :emb::vector 这种紧跟 :: 的绑定歧义。
+    """
+    return "[" + ",".join(repr(float(x)) for x in v) + "]"
+
+
+# 班级名单班写法（如 '软件1班'）的区间扩展：数据里班级是合并班 '软件1-3班'
+_CLASS_SINGLE_RE = re.compile(
+    r"^(?P<prefix>[^\d]+?)(?P<n>\d{1,4})(?P<suffix>班|级|部|年级)?$"
+)
+
+
+def _class_range_regex(class_name: str) -> Optional[str]:
+    """
+    '软件1班' → '^软件1班$|^软件1[-~～至到–—].*班$'（可命中合并班 '软件1-3班'）。
+    非单班写法（本身是区间/无数字）返回 None，保持原匹配逻辑。
+    已知限制：若数据同时存在 '软件1班' 与 '软件10班'，单班写法无法区分，此处按区间语义处理。
+    """
+    m = _CLASS_SINGLE_RE.fullmatch(class_name.strip())
+    if not m:
+        return None
+    prefix, n, suffix = m.group("prefix"), m.group("n"), m.group("suffix") or ""
+    return rf"^{prefix}{n}{suffix}$|^{prefix}{n}[-~～至到–—].*{suffix}$"
+
+
 class PgvectorStore:
     """
     pgvector 存储封装（只暴露与业务无关的增删改查 / 混合检索）。
@@ -406,12 +435,14 @@ class PgvectorStore:
                         or_(StudentRow.name == name, StudentRow.name.like(f"%{name}%"))
                     )
                 if class_name:
-                    conditions.append(
-                        or_(
-                            StudentRow.class_name == class_name,
-                            StudentRow.class_name.like(f"%{class_name}%"),
-                        )
-                    )
+                    cls_conds = [
+                        StudentRow.class_name == class_name,
+                        StudentRow.class_name.like(f"%{class_name}%"),
+                    ]
+                    cls_re = _class_range_regex(class_name)
+                    if cls_re:
+                        cls_conds.append(StudentRow.class_name.regexp_match(cls_re))
+                    conditions.append(or_(*cls_conds))
                 if experiment_name:
                     conditions.append(
                         or_(
@@ -527,8 +558,13 @@ class PgvectorStore:
             sql = "SELECT * FROM v_student_summary WHERE 1=1"
             params: Dict[str, Any] = {}
             if class_name:
-                sql += " AND class_name = :c"
-                params["c"] = class_name
+                cls_re = _class_range_regex(class_name)
+                if cls_re:
+                    sql += " AND class_name ~ :cre"
+                    params["cre"] = cls_re
+                else:
+                    sql += " AND class_name = :c"
+                    params["c"] = class_name
             if student_id:
                 sql += " AND student_id = :sid"
                 params["sid"] = student_id
@@ -563,8 +599,13 @@ class PgvectorStore:
             sql = "SELECT * FROM v_class_summary WHERE 1=1"
             params: Dict[str, Any] = {}
             if class_name:
-                sql += " AND class_name LIKE :c"
-                params["c"] = f"%{class_name}%"
+                cls_re = _class_range_regex(class_name)
+                if cls_re:
+                    sql += " AND class_name ~ :cre"
+                    params["cre"] = cls_re
+                else:
+                    sql += " AND class_name LIKE :c"
+                    params["c"] = f"%{class_name}%"
             if experiment_name:
                 sql += " AND experiment_name LIKE :e"
                 params["e"] = f"%{experiment_name}%"
@@ -582,6 +623,99 @@ class PgvectorStore:
                         d[k] = float(d[k])
                 out.append(d)
             return out
+
+    # -------- 学生行级明细 & 跨实验趋势（成绩类子流程专用）--------
+    @staticmethod
+    def student_scores(
+        *,
+        student_id: Optional[str] = None,
+        name: Optional[str] = None,
+        class_name: Optional[str] = None,
+        limit: int = 200,
+    ) -> List[Dict]:
+        """学生行级成绩明细：一行一个（实验×批次）分数记录，按时间排序。
+        用于个人成绩卡与趋势分析（v_student_summary 是全程聚合，无时间粒度）。"""
+        with db_session() as s:
+            sql = (
+                "SELECT student_id, name, class_name, experiment_name, source_type, "
+                "final_score, weak_count, task_count, created_at "
+                "FROM student_rows WHERE row_type='student' AND final_score IS NOT NULL"
+            )
+            params: Dict[str, Any] = {}
+            if student_id:
+                sql += " AND student_id = :sid"
+                params["sid"] = student_id
+            if name:
+                sql += " AND name LIKE :n"
+                params["n"] = f"%{name}%"
+            if class_name:
+                cls_re = _class_range_regex(class_name)
+                if cls_re:
+                    sql += " AND class_name ~ :cre"
+                    params["cre"] = cls_re
+                else:
+                    sql += " AND class_name LIKE :c"
+                    params["c"] = f"%{class_name}%"
+            sql += " ORDER BY created_at, experiment_name, id LIMIT :lim"
+            params["lim"] = int(limit)
+            rows = s.execute(text(sql), params).mappings().all()
+            out = []
+            for r in rows:
+                d = dict(r)
+                if d.get("final_score") is not None:
+                    d["final_score"] = float(d["final_score"])
+                out.append(d)
+            return out
+
+    @staticmethod
+    def student_trend(
+        *,
+        student_id: Optional[str] = None,
+        name: Optional[str] = None,
+        class_name: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[Dict]:
+        """学生跨实验/跨批次分数序列：按实验分组取平均分，按最早出现时间排序。
+        支持"成绩退步/进步"类问题。已知限制：若某学生只有一期数据，
+        序列长度为 1，无法判断趋势——调用方需如实说明"数据不足"。"""
+        rows = PgvectorStore.student_scores(
+            student_id=student_id, name=name, class_name=class_name, limit=min(int(limit) * 4, 500)
+        )
+        if not rows:
+            return []
+        groups: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        order: List[Tuple[str, str]] = []
+        for r in rows:
+            key = (str(r.get("experiment_name") or ""), str(r.get("source_type") or ""))
+            if key not in groups:
+                groups[key] = {"scores": [], "first_seen": r.get("created_at"), "last_seen": r.get("created_at")}
+                order.append(key)
+            g = groups[key]
+            g["scores"].append(r.get("final_score"))
+            fs, ls = r.get("created_at"), r.get("created_at")
+            if fs and (not g["first_seen"] or fs < g["first_seen"]):
+                g["first_seen"] = fs
+            if ls and (not g["last_seen"] or ls > g["last_seen"]):
+                g["last_seen"] = ls
+        out = []
+        base = rows[0]
+        for key in order:
+            exp, st = key
+            g = groups[key]
+            out.append({
+                "student_id": base.get("student_id", ""),
+                "name": base.get("name", ""),
+                "class_name": base.get("class_name", ""),
+                "experiment_name": exp,
+                "source_type": st,
+                "avg_score": round(sum(g["scores"]) / len(g["scores"]), 2),
+                "record_count": len(g["scores"]),
+                "first_seen": g["first_seen"],
+                "last_seen": g["last_seen"],
+            })
+        # 时间升序：最早做的实验排前面，便于模型判断"前→后"趋势
+        out.sort(key=lambda x: (x["first_seen"] or "", x["experiment_name"] or ""))
+        return out
 
     # ---------- 对话历史 & QA 沉淀 ----------
     @staticmethod
@@ -662,24 +796,119 @@ class PgvectorStore:
                 text(
                     "INSERT INTO qa_sediment (user_question, assistant_reply, hit_knowledge, "
                     "conversation_id, embedding, created_at) "
-                    "VALUES (:q, :a, :hk::text[], :cid, :emb::vector(512), NOW())"
+                    "VALUES (:q, :a, CAST(:hk AS text[]), :cid, CAST(:emb AS vector(512)), NOW())"
                 ),
                 {"q": q, "a": a, "hk": list(hit_knowledge or []),
-                 "cid": conv_id, "emb": list(embedding) if embedding else None},
+                 "cid": conv_id, "emb": _vector_literal(embedding) if embedding else None},
             )
             s.commit()
+        # 沉淀表也做上限治理，防止向量库无限膨胀
+        PgvectorStore.prune_qa()
+
+    @staticmethod
+    def prune_qa(keep: int = 3000) -> int:
+        """qa_sediment 超过上限时删除最旧的记录（按 created_at / id 升序）。
+        每次 save_qa 都带一次 COUNT 查询，成本极低；DELETE 只在超限后发生。
+        """
+        try:
+            with db_session() as s:
+                cnt = s.execute(text("SELECT COUNT(*) FROM qa_sediment")).scalar() or 0
+                if cnt <= keep:
+                    return 0
+                delete_cnt = cnt - keep
+                s.execute(
+                    text(
+                        "DELETE FROM qa_sediment WHERE id IN ("
+                        "  SELECT id FROM qa_sediment ORDER BY created_at ASC, id ASC LIMIT :lim)"
+                    ),
+                    {"lim": delete_cnt},
+                )
+                s.commit()
+                logger.info("pgvector 问答沉淀裁剪：删除最旧 %d 条", delete_cnt)
+                return delete_cnt
+        except Exception as e:
+            logger.warning("pgvector 问答沉淀裁剪失败: %s", e)
+            return 0
 
     @staticmethod
     def retrieve_qa(query_embedding: List[float], top_k: int = 5) -> List[Dict]:
         with db_session() as s:
             rows = s.execute(text("""
                 SELECT user_question, assistant_reply, hit_knowledge, created_at,
-                       1 - (embedding <=> :emb::vector(512)) AS similarity
+                       1 - (embedding <=> CAST(:emb AS vector(512))) AS similarity
                 FROM qa_sediment
                 WHERE embedding IS NOT NULL
                 ORDER BY similarity DESC LIMIT :lim
-            """), {"emb": list(query_embedding), "lim": int(top_k)}).mappings().all()
+            """), {"emb": _vector_literal(query_embedding), "lim": int(top_k)}).mappings().all()
             return [dict(r) for r in rows]
+
+    @staticmethod
+    def count_qa() -> int:
+        """pgvector 问答沉淀条数（用于设置页展示）。"""
+        try:
+            with db_session() as s:
+                return s.execute(text("SELECT COUNT(*) FROM qa_sediment")).scalar() or 0
+        except Exception as e:
+            logger.warning("pgvector 问答沉淀计数失败: %s", e)
+            return 0
+
+    @staticmethod
+    def list_qa(limit: int = 100) -> List[Dict]:
+        """pgvector 问答沉淀列表（新→旧），供设置页逐条管理。"""
+        try:
+            with db_session() as s:
+                rows = s.execute(text(
+                    "SELECT id, user_question, assistant_reply, hit_knowledge, created_at "
+                    "FROM qa_sediment ORDER BY created_at DESC, id DESC LIMIT :lim"
+                ), {"lim": int(limit)}).mappings().all()
+                out = []
+                for r in rows:
+                    d = dict(r)
+                    d["id"] = str(d["id"])
+                    out.append(d)
+                return out
+        except Exception as e:
+            logger.warning("pgvector 问答沉淀列表读取失败: %s", e)
+            return []
+
+    @staticmethod
+    def delete_qa_by_ids(ids: List[str]) -> int:
+        """按 id 逐条删除 pgvector 沉淀，返回删除条数。失败返回 0（不抛出）。"""
+        int_ids: List[int] = []
+        for i in ids:
+            try:
+                int_ids.append(int(i))
+            except (TypeError, ValueError):
+                continue
+        if not int_ids:
+            return 0
+        try:
+            with db_session() as s:
+                # 用 IN 展开占位符，避免 psycopg2 对 list 参数做数组适配的不确定性
+                placeholders = ",".join(f":id{i}" for i in range(len(int_ids)))
+                r = s.execute(
+                    text(f"DELETE FROM qa_sediment WHERE id IN ({placeholders})"),
+                    {f"id{i}": v for i, v in enumerate(int_ids)},
+                )
+                s.commit()
+                logger.info("pgvector 问答沉淀逐条删除：{} 条", r.rowcount or 0)
+                return r.rowcount or 0
+        except Exception as e:
+            logger.warning("pgvector 问答沉淀逐条删除失败: %s", e)
+            return 0
+
+    @staticmethod
+    def clear_qa() -> int:
+        """清空 pgvector 问答沉淀表，返回删除条数。失败返回 0（不抛出）。"""
+        try:
+            with db_session() as s:
+                r = s.execute(text("DELETE FROM qa_sediment"))
+                s.commit()
+                logger.info("pgvector 问答沉淀已清空：{} 条", r.rowcount or 0)
+                return r.rowcount or 0
+        except Exception as e:
+            logger.warning("pgvector 问答沉淀清空失败: %s", e)
+            return 0
 
 
 # ========================= 默认实例 =========================

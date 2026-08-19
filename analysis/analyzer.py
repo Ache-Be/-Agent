@@ -113,4 +113,26 @@ def detect_data_source(filepath: str) -> str:
         return "touge"
     if name.lower().startswith("class"):
         return "mooc"
+    # 文件名不可靠（如上传后 safe_name 编码丢失原名特征）时，读表头做内容级判断
+    return _detect_by_header(filepath)
+
+
+def _detect_by_header(filepath: str) -> str:
+    """内容级兜底：读 CSV 前几行表头，按列名特征判断头歌 / MOOC。
+
+    头歌实验：user_name, student_id, group_name, final_score, task1_name ...
+    MOOC 成绩：userName/testScore/assignmentScore/examScore/videoViewCount ...
+    已知限制：表头也被混淆时返回 unknown，由上层按失败处理，不强行猜测。
+    """
+    import re
+    try:
+        with open(filepath, "r", encoding="utf-8-sig", errors="ignore") as f:
+            head = " ".join(f.readline() for _ in range(5))
+    except OSError:
+        return "unknown"
+    head = head.lower()
+    if re.search(r"final_score|sum_evaluate_count|task\d+_name|evaluate_count", head):
+        return "touge"
+    if re.search(r"testscore|assignmentscore|discussscore|examscore|videoviewcount|signincount", head):
+        return "mooc"
     return "unknown"

@@ -46,6 +46,27 @@
         <span style="margin-left:12px;color:#e6a23c;font-weight:600">{{ form.answerLookupLine }}%</span>
       </el-form-item>
 
+      <el-divider content-position="left">问答沉淀管理</el-divider>
+
+      <el-form-item label="历史问答沉淀">
+        <div style="width:100%">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+            <el-switch v-model="form.enableQaSedimentRef" />
+            <span style="font-size:13px">AI 回答时参考历史问答沉淀</span>
+          </div>
+          <div style="font-size:12px;color:#909399;margin-bottom:8px">
+            开启时 AI 会检索相似历史问答并注入提示词（更连贯但多花 token）；关闭后完全不检索、不注入，
+            可节省 token。当前存量：
+            <b>{{ qaCount.jsonl + qaCount.pgvector }}</b> 条
+            （jsonl {{ qaCount.jsonl }} / pgvector {{ qaCount.pgvector }}）。
+          </div>
+          <el-button :icon="List" @click="openQaManager">管理沉淀（逐条删除）</el-button>
+          <el-button type="danger" plain :icon="Delete" :loading="clearing" @click="handleClearQa">
+            清空全部
+          </el-button>
+        </div>
+      </el-form-item>
+
       <el-alert
         title="保存后会自动重新计算所有学生的薄弱判断、画像等级、聚合报告，下次打开页面即时生效"
         type="warning"
@@ -62,25 +83,170 @@
         <el-button @click="$router.push('/dashboard')">返回仪表盘</el-button>
       </el-form-item>
     </el-form>
+
+    <el-dialog v-model="qaDialogVisible" title="问答沉淀管理（逐条删除）" width="720px" destroy-on-close>
+      <div style="font-size:12px;color:#909399;margin-bottom:8px">
+        共 {{ qaList.length }} 条（仅显示最近 100 条）。勾选后删除，删除即不可恢复；
+        删除后 AI 后续回答不再参考这些历史问答。
+      </div>
+      <el-table
+        :data="qaList"
+        v-loading="qaLoading"
+        max-height="420"
+        @selection-change="onQaSelect"
+      >
+        <el-table-column type="selection" width="44" />
+        <el-table-column label="来源" width="96">
+          <template #default="{ row }">
+            <el-tag size="small" :type="row.source === 'pgvector' ? 'primary' : 'info'">
+              {{ row.source === 'pgvector' ? 'pgvector' : 'jsonl' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="time" label="时间" width="150" />
+        <el-table-column label="问题" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.question }}</template>
+        </el-table-column>
+      </el-table>
+      <template #footer>
+        <el-button @click="qaDialogVisible = false">关闭</el-button>
+        <el-button
+          type="danger"
+          :disabled="!selectedQa.length"
+          :loading="qaDeleting"
+          @click="handleDeleteSelected"
+        >
+          删除选中（{{ selectedQa.length }}）
+        </el-button>
+      </template>
+    </el-dialog>
   </el-card>
 </template>
 
 <script setup lang="ts">
 import { reactive, ref, onMounted, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Setting, Check } from '@element-plus/icons-vue'
+import { Setting, Check, Delete, List } from '@element-plus/icons-vue'
 import request from '@/utils/request'
+import {
+  getQaSedimentCount,
+  clearQaSediment,
+  listQaSediment,
+  deleteQaSediment,
+} from '@/api/chat'
 
 const saving = ref(false)
 const loaded = ref(false)
 const configStatus = ref('')
 const configStatusType = ref<'success' | 'warning' | 'info'>('info')
+const clearing = ref(false)
+const qaCount = reactive({ jsonl: 0, pgvector: 0 })
+
+// 逐条删除：列表对话框
+const qaDialogVisible = ref(false)
+const qaList = ref<any[]>([])
+const qaLoading = ref(false)
+const qaDeleting = ref(false)
+const selectedQa = ref<any[]>([])
+
+const loadQaCount = async () => {
+  try {
+    const r: any = await getQaSedimentCount()
+    qaCount.jsonl = Number(r?.jsonl ?? 0)
+    qaCount.pgvector = Number(r?.pgvector ?? 0)
+  } catch {}
+}
+
+const openQaManager = async () => {
+  qaDialogVisible.value = true
+  await loadQaList()
+}
+
+const loadQaList = async () => {
+  qaLoading.value = true
+  try {
+    const r: any = await listQaSediment(100)
+    qaList.value = r?.logs || []
+  } catch {
+    qaList.value = []
+  } finally {
+    qaLoading.value = false
+  }
+}
+
+const onQaSelect = (rows: any[]) => {
+  selectedQa.value = rows
+}
+
+const handleDeleteSelected = async () => {
+  if (!selectedQa.value.length) return
+  try {
+    await ElMessageBox.confirm(
+      `确定删除选中的 ${selectedQa.value.length} 条沉淀？删除后不可恢复。`,
+      '删除沉淀',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  qaDeleting.value = true
+  try {
+    const items = selectedQa.value.map((r: any) => ({ source: r.source, id: r.id }))
+    const resp: any = await deleteQaSediment(items)
+    const d = resp?.deleted || {}
+    ElMessage.success(`已删除 jsonl ${d.jsonl ?? 0} 条 / pgvector ${d.pgvector ?? 0} 条`)
+    await loadQaList()
+    await loadQaCount()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '删除失败')
+  } finally {
+    qaDeleting.value = false
+  }
+}
+
+const handleClearQa = async () => {
+  try {
+    await ElMessageBox.confirm(
+      `确定清空全部问答沉淀吗？当前 ${qaCount.jsonl + qaCount.pgvector} 条（jsonl ${qaCount.jsonl} / pgvector ${qaCount.pgvector}）。\n\n清空后不可恢复，AI 后续回答将不再参考这些历史问答。`,
+      '清空问答沉淀',
+      { type: 'warning', confirmButtonText: '清空', cancelButtonText: '取消' }
+    )
+  } catch {
+    return  // 用户取消
+  }
+  // 破坏性操作二次确认：输入"清空"两字
+  try {
+    const { value } = await ElMessageBox.prompt(
+      '此操作不可恢复。请输入「清空」两字确认：',
+      '二次确认',
+      { confirmButtonText: '确认清空', cancelButtonText: '取消', inputPlaceholder: '清空' }
+    )
+    if (String(value || '').trim() !== '清空') {
+      ElMessage.warning('未输入「清空」，已取消')
+      return
+    }
+  } catch {
+    return
+  }
+  clearing.value = true
+  try {
+    const resp: any = await clearQaSediment()
+    const c = resp?.cleared || {}
+    ElMessage.success(`已清空问答沉淀（jsonl ${c.jsonl ?? 0} 条 / pgvector ${c.pgvector ?? 0} 条）`)
+    await loadQaCount()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '清空失败')
+  } finally {
+    clearing.value = false
+  }
+}
 
 const form = reactive({
   apiKey: '',
   weakThreshold: 70,
   lowScoreLine: 60,
   answerLookupLine: 30,
+  enableQaSedimentRef: true,
 })
 
 const loadCurrent = async () => {
@@ -90,6 +256,7 @@ const loadCurrent = async () => {
     form.weakThreshold = Math.round((r.weak_threshold ?? 0.7) * 100)
     form.lowScoreLine = Math.round(r.low_score_line ?? 60)
     form.answerLookupLine = Math.round((r.view_answer_alert_rate ?? 0.3) * 100)
+    form.enableQaSedimentRef = r.enable_qa_sediment_ref !== false
     loaded.value = true
     configStatus.value = '已读取当前服务端配置'
     configStatusType.value = 'success'
@@ -105,6 +272,7 @@ const handleReset = () => {
   form.weakThreshold = 70
   form.lowScoreLine = 60
   form.answerLookupLine = 30
+  form.enableQaSedimentRef = true
   ElMessage.info('已恢复为默认值（需点击「保存设置」才会真正写入）')
 }
 
@@ -123,6 +291,7 @@ const handleSave = async () => {
       weak_threshold: form.weakThreshold / 100,
       low_score_line: form.lowScoreLine,
       view_answer_alert_rate: form.answerLookupLine / 100,
+      enable_qa_sediment_ref: form.enableQaSedimentRef,
     })
     if (resp.ok) {
       ElMessage.success(resp.msg || '保存成功')
@@ -152,7 +321,10 @@ const handleSave = async () => {
   }
 }
 
-onMounted(loadCurrent)
+onMounted(() => {
+  loadCurrent()
+  loadQaCount()
+})
 </script>
 
 <style lang="scss" scoped>

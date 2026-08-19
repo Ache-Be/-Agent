@@ -312,37 +312,34 @@ def generate_class_summary(analysis_result: Dict) -> str:
     lines.append(f"有薄弱项的学生：{analysis_result.get('weak_student_count', len(analysis_result.get('student_results', [])))}人")
     lines.append("")
 
-    # 易错知识点排行
+    # 易错知识点排行（Markdown 表格，前端预览渲染为真表格）
     top_error = analysis_result.get("top_error_knowledge", [])
     if top_error:
-        lines.append("-" * 64)
-        lines.append("【知识点易错率排行】")
-        lines.append("-" * 64)
-        header = f"{'知识点名称':<28} {'所属单元':<20} {'易错人数':<10} {'易错率':<8}"
-        lines.append(header)
-        lines.append("-" * 64)
+        lines.append("")
+        lines.append("### 知识点易错率排行")
+        lines.append("")
+        lines.append("| 知识点名称 | 所属单元 | 易错人数 | 易错率 |")
+        lines.append("| --- | --- | --- | --- |")
         for name, info in top_error:
             unit = info["unit"][:18] if info["unit"] else "-"
             lines.append(
-                f"{name[:26]:<28} {unit:<20} "
-                f"{info['error_count']:<10} {info['error_rate']*100:.0f}%"
+                f"| {name[:26]} | {unit} | "
+                f"{info['error_count']} | {info['error_rate']*100:.0f}% |"
             )
         lines.append("")
 
-    # 所有学生薄弱概况
-    lines.append("-" * 64)
-    lines.append("【各学生薄弱概况】")
-    lines.append("-" * 64)
-    header = f"{'姓名':<12} {'学号':<16} {'薄弱子任务':<12} {'薄弱知识点':<12} {'薄弱率':<8}"
-    lines.append(header)
-    lines.append("-" * 64)
+    # 所有学生薄弱概况（Markdown 表格）
+    lines.append("")
+    lines.append("### 各学生薄弱概况")
+    lines.append("")
+    lines.append("| 姓名 | 学号 | 薄弱子任务 | 薄弱知识点 | 薄弱率 |")
+    lines.append("| --- | --- | --- | --- | --- |")
     for sr in analysis_result.get("student_results", []):
         lines.append(
-            f"{sr['name']:<12} {sr.get('student_id', ''):<16} "
-            f"{sr['weak_subtask_count']:<12} {sr['weak_knowledge_count']:<12} "
-            f"{sr['weakness_rate']*100:.0f}%"
+            f"| {sr['name']} | {sr.get('student_id', '')} | "
+            f"{sr['weak_subtask_count']} | {sr['weak_knowledge_count']} | "
+            f"{sr['weakness_rate']*100:.0f}% |"
         )
-
     lines.append("")
     lines.append("=" * 64)
     lines.append(f"  报告生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}")

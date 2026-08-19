@@ -38,7 +38,7 @@ def load_knowledge_once():
             knowledge_base = load_knowledge_base(str(kb_path))
             logger.info("知识库加载完成：%d 条（来自 %s）", len(knowledge_base or []), kb_path.name)
         else:
-            logger.warning("知识库文件不存在：%s（请先运行 python main.py build-knowledge）", kb_path)
+            logger.warning("知识库文件不存在：%s（系统将以空知识库运行，AI 助手的知识点参考将不可用；请将知识库 CSV 放到该路径后重启）", kb_path)
             knowledge_base = []
     except Exception as e:
         logger.warning("知识库加载失败：%s", e)

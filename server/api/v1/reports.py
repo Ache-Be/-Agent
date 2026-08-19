@@ -133,11 +133,21 @@ def _extract_student_display(filename_stem: str) -> Optional[str]:
         name, sid = m1b.group(1), m1b.group(2)
         if _is_real_name(name):
             return f"{name}_{sid}"
-    m2b = _SID_NAME_NEAR_RE.search(stem)
-    if m2b:
-        sid, name = m2b.group(1), m2b.group(2)
+    # 模式 3：姓名 + 脱敏学号（隐私省略，如 张家豪_25________31；
+    # make_student_key 会把 * 转成 _，所以文件名里是连续下划线）
+    m3 = _re.search(
+        r"([\u4e00-\u9fa5]{2,4})[\s_\-]{0,3}((?:\d{1,8})[_xX*]{2,}(?:\d{1,8}))",
+        stripped,
+    )
+    if m3:
+        name, masked = m3.group(1), m3.group(2)
         if _is_real_name(name):
-            return f"{name}_{sid}"
+            return f"{name}_{masked}"
+    # 模式 4：学生_/个人_ 前缀文件，前缀后第一段是纯中文姓名（无学号）
+    if stem.startswith(("学生_", "个人_")):
+        first = stem.split("_", 2)[1] if "_" in stem else ""
+        if _re.fullmatch(r"[\u4e00-\u9fa5]{2,4}", first) and _is_real_name(first):
+            return first
     return None
 
 
@@ -200,10 +210,13 @@ async def api_list_reports(type: str = "all"):
                     stem = de.stem
                     sname = _extract_student_display(stem)
                     student_name = student_id = ""
-                    if sname and "_" in sname:
-                        _parts = sname.split("_", 1)
-                        if len(_parts) == 2:
-                            student_name, student_id = _parts
+                    if sname:
+                        if "_" in sname:
+                            _parts = sname.split("_", 1)
+                            student_name, student_id = _parts[0], _parts[1]
+                        else:
+                            # 纯姓名（无学号/脱敏学号文件）也归为学生报告
+                            student_name = sname
                     if student_id and len(student_id) < 8:
                         student_id = ""
                     category = _classify(name)
@@ -260,6 +273,9 @@ async def api_list_reports(type: str = "all"):
                     x.get("mtime", "")
                 ), reverse=True)
                 best = dict(group[0])
+                # files：该学生全部报告文件名（按 学生_ 优先 + 时间倒序），供前端合并预览
+                best["files"] = [x["name"] for x in group]
+                best["group_count"] = len(group)
                 if len(group) > 1:
                     best["display_name"] = f"{best['display_name']} ({len(group)}份报告)"
                 deduped.append(best)
@@ -314,6 +330,40 @@ async def api_view_report(filename: str):
         "mtime": datetime.fromtimestamp(fp.stat().st_mtime).strftime("%Y-%m-%d %H:%M"),
         "content": content,
     }
+
+
+# ---------- 批量预览报告内容（N 份报告合并展示用）----------
+@router.post("/content/batch")
+async def api_view_report_batch(body: Dict[str, Any]):
+    """
+    按文件名顺序批量返回报告内容，用于同一学生的多份个人报告合并预览。
+    body: {"names": ["个人_xxx.txt", ...]}
+    每个文件名都过 safe_upload_path 路径安全校验，单个失败跳过不中断。
+    """
+    try:
+        names = body.get("names") if isinstance(body, dict) else None
+        if not names or not isinstance(names, list):
+            raise HTTPException(422, "names 必填且必须是数组")
+        names = [str(n) for n in names[:50]]
+        items = []
+        for n in names:
+            fp = safe_upload_path(n)
+            if not fp:
+                continue
+            try:
+                items.append({
+                    "name": fp.name,
+                    "content": fp.read_text(encoding="utf-8", errors="ignore"),
+                })
+            except Exception as e:
+                logger.warning("批量预览读取失败 [%s]: %s", n, e)
+                continue
+        return {"ok": True, "items": items, "total": len(items)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("批量预览失败")
+        raise HTTPException(500, f"批量预览失败：{e}")
 
 
 # ---------- 下载报告 ----------

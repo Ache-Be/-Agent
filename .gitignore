@@ -14,8 +14,12 @@ server/uploads/
 server/data/conversations/
 server/config/analysis_snapshot.json
 server/config/settings.json
+server/config/conversations/
 server/logs/
 *.log
+
+# Embedding 模型（本地下载，体积大不入库；如换机器用脚本重新拉取）
+data/models/
 
 # 前端构建产物
 frontend/dist/
@@ -26,6 +30,9 @@ frontend/node_modules/
 MOOC/
 word+excel+pdf/
 data/knowledge/backups/
+
+# 运行时问答沉淀日志（每次对话都会变）
+data/qa_sediment/
 
 # 临时文件
 *.tmp

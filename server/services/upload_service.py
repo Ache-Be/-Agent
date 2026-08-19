@@ -212,7 +212,15 @@ def process_upload(
             store_bytes: bytes = normalized_bytes if normalized_bytes else raw_bytes
             store_path.write_bytes(store_bytes)
             state.file_hashes[digest] = safe_name
-            temp_path = config.temp_dir / safe_name
+            # 分析用临时文件用「原始文件名」（basename），不用编码后的 safe_name：
+            #  - quiz_parser 从文件名提取 项目号/章节名（"项目0-基本数据类型.xlsx"）
+            #  - detect_data_source 依赖文件名特征（数字开头→touge、class→mooc）
+            # safe_name 编码后（校区软件1-3班__项目0-xxx.xlsx）这些解析会退化。
+            # 循环内顺序执行、用完即删，同批同名文件不存在互相覆盖问题。
+            temp_name = Path(original_name).name
+            temp_path = (config.temp_dir / temp_name).resolve()
+            if not str(temp_path).startswith(str(config.temp_dir.resolve())):
+                temp_path = config.temp_dir / safe_name
             temp_path.write_bytes(store_bytes)
 
             # ============================================================

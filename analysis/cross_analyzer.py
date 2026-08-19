@@ -519,18 +519,34 @@ def generate_cross_student_report(student_info: Dict) -> str:
                 lines.append(f"    · {kw['name']}（来自：{kw['related_subtask']}）")
         lines.append("")
 
-    # 随堂测验章节成绩
+    # 随堂测验章节成绩（按项目分组展示，项目之间空行）
     quiz_chapters = student_info.get("quiz_chapters", [])
     if quiz_chapters:
         lines.append("-" * 64)
         lines.append(f"【随堂测验章节成绩】共 {len(quiz_chapters)} 个章节，"
                      f"平均正确率 {student_info.get('quiz_avg_accuracy', 0)*100:.0f}%")
         lines.append("-" * 64)
+        # 章节可能跨文件乱序，按 项目号+章节名 排好再分组
+        quiz_chapters = sorted(
+            quiz_chapters,
+            key=lambda q: (
+                int(q["project_id"]) if str(q.get("project_id", "") or "").isdigit() else 999,
+                str(q.get("chapter", "")),
+            ),
+        )
+        current_project = None
         for q in quiz_chapters:
             acc = q["accuracy"]
             flag = "  ⚠薄弱" if acc < WEAK_THRESHOLD else ""
+            proj_id = str(q.get("project_id", "") or "").strip()
+            proj = f"项目{proj_id}" if proj_id else "未分组"
+            if proj != current_project:
+                if current_project is not None:
+                    lines.append("")
+                current_project = proj
+                lines.append(f"  ▸ {proj}")
             lines.append(
-                f"  [项目{q['project_id']} {q['chapter']}] "
+                f"    [{q.get('chapter', '')}] "
                 f"得分 {q['score']:.0f}/{q['total_score']:.0f} "
                 f"正确率 {acc*100:.0f}%{flag}"
             )
@@ -574,33 +590,32 @@ def generate_cross_summary(agg_result: Dict) -> str:
     lines.append(f"有薄弱项的学生：{len([s for s in agg_result['student_list'] if s['weak_count'] > 0])} 人")
     lines.append("")
 
-    # 易错知识点排行
+    # 易错知识点排行（Markdown 表格，前端预览渲染为真表格）
     top_error = agg_result.get("top_error_knowledge", [])
     if top_error:
-        lines.append("-" * 64)
-        lines.append("【知识点易错率排行】")
-        lines.append("-" * 64)
-        header = f"{'知识点名称':<28} {'所属单元':<20} {'易错人数':<10} {'易错率':<8}"
-        lines.append(header)
-        lines.append("-" * 64)
+        lines.append("")
+        lines.append("### 知识点易错率排行")
+        lines.append("")
+        lines.append("| 知识点名称 | 所属单元 | 易错人数 | 易错率 |")
+        lines.append("| --- | --- | --- | --- |")
         for name, info in top_error[:15]:
             unit = info["unit"][:18] if info["unit"] else "-"
-            lines.append(f"{name[:26]:<28} {unit:<20} {info['error_count']:<10} {info['error_rate']*100:.0f}%")
+            lines.append(
+                f"| {name[:26]} | {unit} | {info['error_count']} | {info['error_rate']*100:.0f}% |"
+            )
         lines.append("")
 
-    # 学生列表
-    lines.append("-" * 64)
-    lines.append("【学生薄弱概况】")
-    lines.append("-" * 64)
-    header = f"{'姓名':<12} {'学号':<16} {'实验数':<8} {'薄弱子任务':<12} {'薄弱知识点':<12} {'薄弱率':<8}"
-    lines.append(header)
-    lines.append("-" * 64)
+    # 学生列表（Markdown 表格）
+    lines.append("")
+    lines.append("### 学生薄弱概况")
+    lines.append("")
+    lines.append("| 姓名 | 学号 | 实验数 | 薄弱子任务 | 薄弱知识点 | 薄弱率 |")
+    lines.append("| --- | --- | --- | --- | --- | --- |")
     for s in agg_result["student_list"]:
         lines.append(
-            f"{s['name']:<12} {s['student_id']:<16} {s['experiment_count']:<8} "
-            f"{s['weak_count']:<12} {s['weak_knowledge_count']:<12} {s['weak_rate']*100:.0f}%"
+            f"| {s['name']} | {s['student_id']} | {s['experiment_count']} | "
+            f"{s['weak_count']} | {s['weak_knowledge_count']} | {s['weak_rate']*100:.0f}% |"
         )
-
     lines.append("")
     lines.append("=" * 64)
     lines.append(f"  报告生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}")

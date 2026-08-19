@@ -370,7 +370,7 @@ def delete_data_file(name: str) -> bool:
 
 
 def delete_batch_data_files(names: List[str]) -> bool:
-    """批量删除上传的数据文件，连带清理相关报告和内存结果。"""
+    """批量删除上传的数据文件，连带清理相关报告和内存结果，并同步清数据库记录。"""
     import os as _os
     if not names:
         return True
@@ -378,6 +378,9 @@ def delete_batch_data_files(names: List[str]) -> bool:
     removed_count = 0
     removed_experiments = set()
     name_set = set(names)
+    # 删除前先记下 name → hash，删完后按 hash 清 uploaded_files / student_rows
+    hash_by_name = {fn: h for h, fn in state.file_hashes.items()}
+    removed_hashes = set()
 
     for name in names:
         target = config.upload_dir / _os.path.basename(name)
@@ -388,6 +391,9 @@ def delete_batch_data_files(names: List[str]) -> bool:
             removed_count += 1
         except OSError:
             continue
+        h = hash_by_name.get(target.name)
+        if h:
+            removed_hashes.add(h)
 
         # 清理归档报告
         stem = "".join(c if c.isalnum() or c in " -_" else "_" for c in Path(name).stem)
@@ -430,11 +436,22 @@ def delete_batch_data_files(names: List[str]) -> bool:
         _save_analysis_snapshot()
     else:
         rebuild_agg_data()
+
+    # 数据库同步：按文件 hash 删除 uploaded_files（student_rows 级联清），失败不影响磁盘结果
+    try:
+        from core.db import pg_store
+        for h in removed_hashes:
+            try:
+                pg_store.delete_uploaded_file(file_hash=h)
+            except Exception as e:
+                logger.warning("删除数据库文件记录失败 [%s]: %s", h, e)
+    except Exception as e:
+        logger.warning("数据库同步删除失败（仍继续）: %s", e)
     return True
 
 
 def delete_all_data_files() -> bool:
-    """清空所有上传的数据文件及分析结果（重置状态）"""
+    """清空所有上传的数据文件、报告、内存状态及数据库记录（彻底重置）"""
     import shutil
     try:
         # 物理删除 uploads 目录下的所有数据文件
@@ -461,6 +478,20 @@ def delete_all_data_files() -> bool:
 
         # 更新快照
         _save_analysis_snapshot()
+
+        # [NEW] 数据库同步清空（uploaded_files + student_rows 级联），
+        # 避免"界面清空后数据库残留、重新上传被判重跳过"的不一致
+        try:
+            from core.db import pg_store
+            pg_store.wipe_all_uploads()
+        except Exception as e:
+            logger.warning("清空数据库记录失败（不影响磁盘清理）: %s", e)
+        # [NEW] 报告列表缓存也清，否则 30s 内列表仍显示已删除的文件
+        try:
+            from api.v1.reports import _LIST_CACHE as _rep_cache
+            _rep_cache.clear()
+        except Exception:
+            pass
         return True
     except Exception as e:
         logger.error("清空所有文件失败: %s", e)

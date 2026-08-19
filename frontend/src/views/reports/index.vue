@@ -248,7 +248,7 @@ const loadOverview = async () => {
   } catch {}
 }
 
-// 预览
+// 预览：同一学生多份报告（如 20份）叠加展示，可上下滚动
 const previewVisible = ref(false)
 const previewing = ref<any>({ name: '', display_name: '', size_str: '', mtime: '' })
 const previewContent = ref('')
@@ -257,8 +257,18 @@ const preview = async (row: ReportItem) => {
   previewVisible.value = true
   previewContent.value = ''
   try {
-    const data = await api.viewReportContent(row.name)
-    previewContent.value = data.content
+    const files = (row as any).files?.length > 1 ? (row as any).files : null
+    if (files) {
+      const data = await api.viewReportContentBatch(files)
+      const items = data.items || []
+      previewContent.value = items.map((it: any, i: number) =>
+        `--- 第 ${i + 1} 份 / 共 ${items.length} 份：${it.name} ---\n\n${it.content}`
+      ).join('\n\n')
+      if (!items.length) previewContent.value = '未找到可预览的报告文件'
+    } else {
+      const data = await api.viewReportContent(row.name)
+      previewContent.value = data.content
+    }
   } catch (e: any) {
     previewContent.value = `加载失败：${e?.message || '未知错误'}`
   }

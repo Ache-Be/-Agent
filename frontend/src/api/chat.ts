@@ -37,3 +37,27 @@ export const deleteConversation = (id: string) => {
 export const chat = (data: { message: string; conversation_id?: string }) => {
   return request.post('/api/chat', data)
 }
+
+export const getQaSedimentCount = (): Promise<{ jsonl: number; pgvector: number }> => {
+  return request.get('/api/chat/qa-sediment-count') as any
+}
+
+export const clearQaSediment = (): Promise<{ cleared: { jsonl: number; pgvector: number } }> => {
+  return request.delete('/api/chat/qa-sediment') as any
+}
+
+export interface QaSedimentItem {
+  source: 'jsonl' | 'pgvector'
+  id: string
+  question: string
+  answer: string
+  time: string
+}
+
+export const listQaSediment = (limit = 100): Promise<{ total: number; logs: QaSedimentItem[] }> => {
+  return request.get('/api/qa-sediment', { params: { limit } }) as any
+}
+
+export const deleteQaSediment = (items: { source: string; id: string }[]) => {
+  return request.delete('/api/chat/qa-sediment', { data: { items } }) as any
+}
