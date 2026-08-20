@@ -18,6 +18,12 @@ server/config/conversations/
 server/logs/
 *.log
 
+# 敏感配置（含数据库密码，仅本地）
+server/config.yaml
+
+# 分析输出产物（含真实学情数据，不上传）
+output/
+
 # Embedding 模型（本地下载，体积大不入库；如换机器用脚本重新拉取）
 data/models/
 
@@ -30,6 +36,12 @@ frontend/node_modules/
 MOOC/
 word+excel+pdf/
 data/knowledge/backups/
+data/knowledge/knowledge_base.csv
+data/knowledge/knowledge_base.backup.csv
+data/student_scores.csv
+
+# 个人简历（含照片与联系方式，不上传）
+生成简历/
 
 # 运行时问答沉淀日志（每次对话都会变）
 data/qa_sediment/

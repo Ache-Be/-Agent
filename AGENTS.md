@@ -38,6 +38,14 @@
 - **路径处理**：统一使用 `pathlib.Path` 处理跨平台路径拼接。
 - **图标引用**：Element Plus 图标引用若导致 build 报错，请优先检查导入路径或更换同类图标。
 
+**Embedding 库选型速查**（sentence-transformers 同级工具，简历/面试素材）：
+- `FlagEmbedding`（智源官方）：BGE 系列配套库，embedding + reranker + 微调一站式；本项目所用 bge-small-zh-v1.5 同源。
+- `fastembed`（Qdrant）：ONNX 推理、无 torch 依赖，轻量快，适合服务端部署。
+- `text2vec`：中文向量化封装，模型开箱即用。
+- `transformers` + pooling：最底层方案，手写 CLS/mean pooling，可控性最强。
+- API 类：OpenAI `text-embedding-3` / 阿里 DashScope `text-embedding-v4` / 智谱 `embedding-3` / `Qwen3-Embedding` —— 免部署按量付费，质量高但数据出域。
+- 对比维度：本地 vs API、依赖重量、中文效果、reranker/微调支持、部署成本。
+
 ## 四、 交付检查项
 
 - [ ] Python 代码语法与核心逻辑冒烟通过。
